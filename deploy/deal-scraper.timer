@@ -1,0 +1,9 @@
+[Unit]
+Description=deal-scraper Marktguru timer (Mon,Thu 08:00)
+
+[Timer]
+OnCalendar=Mon,Thu *-*-* 08:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

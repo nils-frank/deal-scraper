@@ -1,0 +1,12 @@
+[Unit]
+Description=deal-scraper Marktguru run
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker run --rm --name deal-scraper \
+  --env-file /srv/deal-scraper/.env \
+  -v /srv/deal-scraper/data:/data \
+  --memory=1600m \
+  deal-scraper:local
