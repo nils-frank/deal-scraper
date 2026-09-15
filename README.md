@@ -7,6 +7,9 @@ notification (plus updates a to-do list) when something on the list is on sale.
 Runs to completion once per invocation - meant to be triggered by a systemd timer or
 cron, twice a week, not run as a standing service.
 
+This is a private, single-user homelab tool shared here as a code reference, not a
+running public service and not offered for anyone else's use.
+
 ## How it works
 
 1. **Fetch** - reads the watchlist from a Home Assistant `todo.*` entity, then queries
@@ -31,9 +34,10 @@ Marktguru's search endpoint isn't a documented public API - it's the same one th
 own web frontend calls, with an `apiKey`/`clientKey` pair extracted at runtime from a
 script block on their homepage (`src/fetch_marktguru.py`). This is how a prior open
 source project ([openclaw-supermarket-deals](https://github.com/benmillerat/openclaw-supermarket-deals))
-does it too. This is a low-volume personal automation (a handful of requests, twice a
-week) and not affiliated with Marktguru - check their terms before running this
-against their service yourself, and don't scale it up.
+does it too. This runs privately for one household at a handful of requests twice a
+week, isn't affiliated with Marktguru, and isn't run as or offered as a service to
+anyone else. Marktguru's terms prohibit automated data extraction - check them
+yourself before running this against their service, and don't scale it up.
 
 ## Running it
 
