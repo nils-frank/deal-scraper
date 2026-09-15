@@ -17,7 +17,7 @@ from typing import Optional
 
 import requests
 
-from schema import Offer, parse_german_price
+from schema import Offer
 
 log = logging.getLogger(__name__)
 
