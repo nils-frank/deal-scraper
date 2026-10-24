@@ -21,8 +21,118 @@ live-updating dashboard view ("Angebote", `lovelace/deal-scraper`), and sends
 the descriptions and the push. See `OPERATIONS.md` for the current known issues
 with this (tap-to-navigate on the push not yet working).
 
-**Purpose of this document:** standalone handoff brief for an **implementation
-agent** with no prior conversation context. It contains the research background,
+## Current design: a homelab deal service (architecture B)
+
+Decided on 2026-10-24 ("lets go with B for now"): deal-scraper grows from a
+twice-weekly batch job into a small homelab deal service. Current grocery
+offers can then be asked for conversationally ("where can I get butter right
+now?") through an agent in Claude Code and Claude Desktop, and Home Assistant
+can show more than text. It is built in phases:
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1. Core | `src/deals/` package; offer store v2 with an in-place migration; Marktguru client with key cache, query cache and a shared daily budget; query engine and `deals find`; category signal and verdict log in the batch run | Built |
+| 2. Service and agents | HTTP API, MCP server and `/healthz` in a long-running container from the same image, sharing the SQLite file; write tools for the watchlist and the shopping list; deploy config in the homelab repo | Planned |
+| 3. Home Assistant | REST sensor and an image card in the existing Angebote tab of the Overview dashboard, an Assist sentence, an actionable push | Planned |
+| 4. Refinement | MCP Apps cards in Claude Desktop, `price_history`, the keep-or-drop decision on the LLM tier | Planned |
+
+### Layout
+
+One image, one console script `deals`:
+
+- `deals run-watchlist` is the image's default command, so the systemd timer
+  in `deploy/` runs it unchanged: twice weekly, `docker run --rm`, the local
+  LLM inside. It produces the same to-do updates and pushes as before.
+- `deals find <query> [--when now|week|upcoming] [--json|--speech]` answers one
+  question from the command line.
+
+| Module | Role |
+|---|---|
+| `marktguru.py` | Marktguru client: normalization, key cache, query cache, budget, fallback |
+| `store.py` | SQLite store, schema migration, retention |
+| `query.py` | `when` filter, grouping, validity labels, text and speech renderings |
+| `match.py` | Category signal, then rapidfuzz |
+| `llm_escalate.py` | Local model for the uncertain middle, batch only |
+| `ha.py` | Home Assistant REST calls |
+| `watchlist_run.py` | The batch run |
+| `cli.py` | Command line |
+
+### Binding decisions
+
+- **Store (decision 3): SQLite on `raspi4-02` local disk.** Tables `offers`
+  (every fetched offer, upserted on each fetch), `fetches` plus `fetch_offers`
+  (one row per live search and the offers it returned), `matches` (every
+  watchlist verdict), the unchanged `notified_offers` dedup table, and `kv`
+  for the cached Marktguru keys. WAL mode and a busy timeout let a second
+  process share the file; multi-statement writes take the lock up front.
+  Opening a v1 database migrates it in place (`PRAGMA user_version` 2). v1
+  stored `valid_from` as the UTC date of Marktguru's start instant, one day
+  early; v2 reads validity in local time and re-dates the v1 dedup rows, so
+  nothing already pushed is pushed again.
+  - Retention: offers 12 months after they ended, `raw_json` 30 days after
+    the offer was last fetched, the fetch log 90 days, verdicts 12 months.
+    The watchlist run prunes at its start.
+  - Backup: a nightly copy to the NAS like `mealie-backup`. This is a
+    homelab deploy concern and lands with phase 2.
+- **Marktguru traffic (decision 4): live search on demand with cache and daily
+  cap.** The terms prohibit automated extraction, so traffic stays at "one
+  person browsing" scale:
+  - the frontend keys are cached for about 6 hours;
+  - a search for the same normalized query within 12 hours is answered from
+    the store without a request;
+  - at most 30 live searches per local day, shared by every caller including
+    the watchlist run and counted in `fetches`. Failed searches and the retry
+    after a key refresh count too;
+  - once the budget is spent or Marktguru fails, the answer comes from the
+    newest stored result for that query and states its fetch age;
+  - no speculative prefetch, the identifying `User-Agent` stays, and only the
+    deal host talks to Marktguru.
+- **Answers.** `when` is `now` (valid today; on a Sunday, the next opening
+  day, Monday; plus offers starting within 7 days as "coming up"), `week`
+  (valid at some point in the next 7 days) or `upcoming` (starts later). The
+  category prefilter runs first, then rapidfuzz. Results are grouped by
+  product, sorted by price then unit price, with current and upcoming offers
+  listed separately. Every offer states its validity span with weekday and
+  date, as in "butter is 0.99 EUR until Sat 24 Oct at REWE". Every result
+  carries `fetched_at`, `from_cache` and `budget_left`. A short German speech
+  rendering serves the later Home Assistant Assist path.
+- **Matching (decision 11): keep the local LLM tier for the batch, add a
+  category signal, log verdicts, decide after about 4 weeks.** When the
+  watchlist item names a Marktguru category ("Butter"), offers in other
+  categories (Butterkäse, Butterkekse, Stollen) are rejected before rapidfuzz.
+  The category never accepts an offer on its own, because margarine and
+  spreads also sit in "Butter". Every verdict lands in `matches` with its
+  method (`fuzzy`, `category` or `llm`); the logged escalation rate decides
+  whether the model stays. Interactive answers carry no model: the calling
+  agent judges the candidates.
+- **No public connector (decision 7): "revisit on concrete need".** The
+  service stays LAN-only; see "Future options".
+
+### Future options
+
+Recorded so they are not lost, each with the trigger to revisit it.
+
+- **Option C, a public connector** ("might be an option later"): expose the
+  MCP endpoint through Tailscale Funnel or a Cloudflare Tunnel, put OAuth in
+  front, and register it as a claude.ai custom connector. Deal questions would
+  then work in claude.ai web, natively in Claude Desktop, and in the Claude
+  mobile app. It costs a public endpoint into the homelab, an OAuth server to
+  run, and a worse ToS posture, since a public tool reads as "offered as a
+  service" and lets others drive its traffic. Trigger: wanting deal answers
+  from the Claude mobile app rather than the Home Assistant app.
+
+| Item | Trigger to revisit |
+|---|---|
+| HACS custom integration for Home Assistant | The REST-sensor card proves limiting |
+| Home Assistant LLM conversation agent | Free-form phone questions are wanted, at the cost of a paid API key |
+| kaufda.de as a second source | Marktguru misses a chain the household uses |
+| Prefetching a fixed list of staples | The store shows the same staples being asked every week |
+
+---
+
+**Purpose of the sections below:** the original standalone handoff brief for
+an **implementation agent** with no prior conversation context, kept as the
+record of the batch job's design. It contains the research background,
 the concrete decisions made against this specific homelab, and an ordered build
 plan. Everything under "Decisions" is settled — do not re-litigate it without a
 concrete blocker; everything under "Open questions before build" must be
@@ -178,7 +288,8 @@ No model above ~3B is worth considering for this workload.
 ## Final architecture
 
 One container run per timer trigger, one image, four stages run in sequence per
-invocation:
+invocation (`deals run-watchlist` still runs these; "Current design" above adds
+the offer store, the shared Marktguru client and the category signal):
 
 1. **Fetch** - HTTP JSON calls against Marktguru. Negligible compute. The
    kaufda.de fallback for gaps was planned but never built.

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-import match
 from conftest import make_offer
-from match import MatchDecision
+from deals import match
+from deals.match import MatchDecision, MatchMethod
 
 
 def test_identical_title_is_confident_match():
@@ -44,3 +44,38 @@ def test_classify_all_keeps_offer_order():
     offers = [make_offer(offer_id="1"), make_offer(offer_id="2")]
     results = match.classify_all("Testmarke", offers)
     assert [r.offer.offer_id for r in results] == ["marktguru:1", "marktguru:2"]
+
+
+def test_category_named_by_item_rules_out_other_categories():
+    offers = [
+        make_offer(offer_id="1", title="Testmarke Butter", category="Butter"),
+        make_offer(offer_id="2", title="Testmarke Butter-Kekse", category="Kekse"),
+        make_offer(offer_id="3", title="Butter Ohne Kategorie"),
+    ]
+    assert match.target_categories("Bio Butter", offers) == {"Butter"}
+    results = match.classify_all("Butter", offers)
+    assert [(r.decision, r.method) for r in results] == [
+        (MatchDecision.MATCH, MatchMethod.FUZZY),
+        (MatchDecision.NO_MATCH, MatchMethod.CATEGORY),
+        (MatchDecision.MATCH, MatchMethod.FUZZY),
+    ]
+
+
+def test_category_never_rules_in():
+    offer = make_offer(title="Halbfettmargarine", category="Butter")
+    [result] = match.classify_all("Butter", [offer])
+    assert (result.decision, result.method) == (MatchDecision.NO_MATCH, MatchMethod.FUZZY)
+
+
+def test_brand_item_gives_no_category_signal():
+    offers = [
+        make_offer(offer_id="1", title="Testmarke Frischkaese", category="Frischkaese"),
+        make_offer(offer_id="2", title="Testmarke Kuchen", category="Kuchen & Feinbackwaren"),
+    ]
+    assert match.target_categories("Testmarke", offers) == frozenset()
+    assert [r.decision for r in match.classify_all("Testmarke", offers)] == [MatchDecision.MATCH, MatchDecision.MATCH]
+
+
+def test_category_names_compare_without_case_or_punctuation():
+    offers = [make_offer(category="Kuchen & Feinbackwaren")]
+    assert match.target_categories("kuchen feinbackwaren", offers) == {"Kuchen & Feinbackwaren"}

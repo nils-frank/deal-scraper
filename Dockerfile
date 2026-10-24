@@ -44,17 +44,19 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY --from=llama-build /build/build/bin/llama-completion /opt/llama/llama-completion
 COPY --from=model-fetch /model.gguf /opt/llama/model.gguf
 ENV LLAMA_CLI_BIN=/opt/llama/llama-completion
 ENV LLAMA_MODEL_PATH=/opt/llama/model.gguf
 
-COPY src/ /app/
+COPY pyproject.toml /app/
+COPY src/ /app/src/
+RUN pip install --no-cache-dir /app
 
 RUN useradd -u 1000 -m scraper && mkdir -p /data && chown scraper:scraper /data
 USER scraper
 
-ENTRYPOINT ["python3", "/app/main.py"]
+# No arguments runs the watchlist batch, as the systemd unit in deploy/ expects;
+# `docker run ... deal-scraper:local find Butter` runs a one-off query instead.
+ENTRYPOINT ["deals"]
+CMD ["run-watchlist"]

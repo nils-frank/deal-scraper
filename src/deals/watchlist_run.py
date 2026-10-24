@@ -1,8 +1,11 @@
-"""Entry point: fetch -> match -> (conditional escalate) -> dedup -> notify.
+"""The watchlist run (`deals run-watchlist`): fetch -> match -> (conditional
+escalate) -> dedup -> notify.
 
 Runs to completion once per invocation and then exits - meant to be invoked by a
 systemd timer or cron job via `docker run --rm`, not run as a long-lived service.
-See `deploy/` for an example unit.
+See `deploy/` for an example unit. Its searches go through the shared Marktguru
+client, so they are cached, stored and counted against the same daily budget as
+every other caller.
 """
 from __future__ import annotations
 
@@ -11,22 +14,16 @@ import os
 from collections import Counter
 from datetime import date
 
-import ha_client
-import store
-from fetch_marktguru import fetch_offers_for_queries
-from llm_escalate import escalate
-from match import MatchDecision, classify_all
+from deals import ha, marktguru, store
+from deals.llm_escalate import escalate
+from deals.match import MatchDecision, MatchMethod, classify_all
+from deals.schema import local_date, utcnow
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-log = logging.getLogger("deal_scraper")
+log = logging.getLogger(__name__)
 
-PLZ = os.environ["DEAL_SCRAPER_PLZ"]
 TODO_ENTITY_ID = os.environ.get("TODO_ENTITY_ID", "todo.lebensmittel_prospekt_tracker")
 ANGEBOTE_ENTITY_ID = os.environ.get("ANGEBOTE_ENTITY_ID", "todo.aktuelle_angebote")
-NOTIFY_SERVICE = os.environ["NOTIFY_SERVICE"]
-DB_PATH = os.environ.get("DB_PATH", "/data/deal-scraper.db")
 DASHBOARD_PATH = os.environ.get("DASHBOARD_PATH", "/lovelace/deal-scraper")
-OFFERS_PER_QUERY = 40
 
 
 def format_validity(offer, today: date) -> str:
@@ -88,7 +85,7 @@ def sync_watchlist_descriptions(conn, watchlist: list[dict], today: date) -> Non
         if description == (item.get("description") or None):
             continue
         try:
-            ha_client.update_todo_item_description(TODO_ENTITY_ID, item["uid"], description)
+            ha.update_todo_item_description(TODO_ENTITY_ID, item["uid"], description)
         except Exception:
             log.exception("Todo description update failed for %r, continuing.", item["summary"])
             continue
@@ -96,52 +93,60 @@ def sync_watchlist_descriptions(conn, watchlist: list[dict], today: date) -> Non
 
 
 def run() -> int:
+    plz = os.environ["DEAL_SCRAPER_PLZ"]
+    notify_service = os.environ["NOTIFY_SERVICE"]
+    db_path = os.environ.get("DB_PATH", store.DEFAULT_DB_PATH)
     log.info(
         "Starting run: PLZ=%s TODO_ENTITY_ID=%s ANGEBOTE_ENTITY_ID=%s NOTIFY_SERVICE=%s DB_PATH=%s DASHBOARD_PATH=%s",
-        PLZ, TODO_ENTITY_ID, ANGEBOTE_ENTITY_ID, NOTIFY_SERVICE, DB_PATH, DASHBOARD_PATH,
+        plz, TODO_ENTITY_ID, ANGEBOTE_ENTITY_ID, notify_service, db_path, DASHBOARD_PATH,
     )
-    watchlist = ha_client.get_todo_items(TODO_ENTITY_ID)
+    watchlist = ha.get_todo_items(TODO_ENTITY_ID)
     if not watchlist:
         log.info("Watchlist %s is empty, nothing to do.", TODO_ENTITY_ID)
         return 0
     log.info("Watchlist (%d items): %s", len(watchlist), [i["summary"] for i in watchlist])
 
-    today = date.today()
+    now = utcnow()
+    today = local_date(now)
     notified_offers = []
     escalation_count = 0
 
-    with store.open_store(DB_PATH) as conn:
+    with store.open_store(db_path) as conn:
+        store.prune(conn, now)
+        client = marktguru.Client(conn, plz, clock=utcnow)
         stale_angebote = store.prune_expired(conn, today)
         for summary in stale_angebote:
             try:
-                ha_client.remove_todo_item(ANGEBOTE_ENTITY_ID, summary)
+                ha.remove_todo_item(ANGEBOTE_ENTITY_ID, summary)
             except Exception:
                 log.exception("Angebote list removal failed for %r, continuing.", summary)
         sync_watchlist_descriptions(conn, watchlist, today)
 
-        angebote_by_summary = {i["summary"]: i for i in ha_client.get_todo_items(ANGEBOTE_ENTITY_ID)}
+        angebote_by_summary = {i["summary"]: i for i in ha.get_todo_items(ANGEBOTE_ENTITY_ID)}
 
         for idx, item in enumerate(watchlist, start=1):
             item_summary = item["summary"]
             log.info("--- Item %d/%d: %r (uid=%s) ---", idx, len(watchlist), item_summary, item["uid"])
-            offers = fetch_offers_for_queries([item_summary], PLZ, limit=OFFERS_PER_QUERY)
-            log.info("  %r: %d candidate offers from Marktguru", item_summary, len(offers))
+            search = client.search_narrowing(item_summary)
+            offers = search.offers
+            log.info(
+                "  %r: %d candidate offers from Marktguru (%s, fetched %s)",
+                item_summary, len(offers), search.source, search.fetched_at,
+            )
 
             results = classify_all(item_summary, offers)
             new_offers = []
             for result in results:
-                decision = result.decision
+                decision, method = result.decision, result.method
                 if decision == MatchDecision.UNCERTAIN:
                     escalation_count += 1
-                    is_match = escalate(item_summary, result.offer.title)
-                elif decision == MatchDecision.MATCH:
-                    is_match = True
-                else:
-                    is_match = False
+                    decision = MatchDecision.MATCH if escalate(item_summary, result.offer.title) else MatchDecision.NO_MATCH
+                    method = MatchMethod.LLM
+                store.record_match(conn, item_summary, result.offer.offer_id, result.score, decision.value, method.value, now)
 
-                if not is_match:
+                if decision != MatchDecision.MATCH:
                     continue
-                log.info("  MATCH accepted: %r (score=%.0f, decision=%s)", result.offer.title, result.score, decision.value)
+                log.info("  MATCH accepted: %r (score=%.0f, method=%s)", result.offer.title, result.score, method.value)
 
                 if store.already_notified(conn, result.offer, item_summary):
                     log.info("  SKIP (dedup): %r already notified for item %r", result.offer.title, item_summary)
@@ -166,11 +171,11 @@ def run() -> int:
                         for line in (existing.get("description") or "").split("\n")
                         if line.strip()
                     ]
-                    ha_client.update_todo_item_description(
+                    ha.update_todo_item_description(
                         ANGEBOTE_ENTITY_ID, existing["uid"], markdown_list(prior_lines + new_lines)
                     )
                 else:
-                    ha_client.add_todo_item(ANGEBOTE_ENTITY_ID, item_summary, markdown_list(new_lines))
+                    ha.add_todo_item(ANGEBOTE_ENTITY_ID, item_summary, markdown_list(new_lines))
             except Exception:
                 log.exception(
                     "Angebote list upsert failed for %r, not recording dedup so next run retries.",
@@ -187,8 +192,8 @@ def run() -> int:
 
     if notified_offers:
         try:
-            ha_client.notify(
-                NOTIFY_SERVICE,
+            ha.notify(
+                notify_service,
                 format_push_message(notified_offers, today),
                 title="Prospekt-Check",
                 data={"tag": "deal-scraper", "url": DASHBOARD_PATH},
@@ -203,6 +208,3 @@ def run() -> int:
     )
     return 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(run())
