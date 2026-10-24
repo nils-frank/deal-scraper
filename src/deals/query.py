@@ -205,7 +205,7 @@ def _spoken_day(day: date, today: date) -> str:
 def _spoken_span(offer: Offer, today: date) -> str:
     start = _spoken_day(offer.valid_from, today)
     if offer.valid_from == offer.valid_to:
-        return f"nur am {start}"
+        return f"nur {start}" if start in ("heute", "morgen") else f"nur am {start}"
     return f"ab {start} bis {_spoken_day(offer.valid_to, today)}"
 
 
