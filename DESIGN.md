@@ -15,9 +15,9 @@ locked, once a plain single push per match proved easy to miss): each run
 rewrites every watchlist to-do item's description from its still-valid matched
 offers (per store one line for its cheapest offer valid today and one for its
 cheapest upcoming offer, current offers first, each group cheapest first,
-cleared once all of them have expired), pushes the full match list to a live-updating dashboard view
-("Angebote", `lovelace/deal-scraper`), and sends **one** consolidated push per
-run instead of one per match. An offer that starts later shows "ab <date>" in
+cleared once all of them have expired), pushes the full match list to a
+live-updating dashboard view ("Angebote", `lovelace/deal-scraper`), and sends
+**one** consolidated push per run instead of one per match. An offer that starts later shows "ab <date>" in
 the descriptions and the push. See `OPERATIONS.md` for the current known issues
 with this (tap-to-navigate on the push not yet working).
 
