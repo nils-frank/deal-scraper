@@ -116,12 +116,11 @@ def record_notified(
 
 def valid_offers(conn: sqlite3.Connection, watchlist_summary: str, today: date) -> list[StoredOffer]:
     """Every recorded offer for this watchlist item that has not ended before
-    `today` (offers starting later are included), cheapest first. Rows without
-    display details (written before those columns existed) are skipped."""
+    `today` (offers starting later are included). Rows without display details
+    (written before those columns existed) are skipped."""
     rows = conn.execute(
         "SELECT title, retailer, price, valid_from, valid_to FROM notified_offers "
-        "WHERE watchlist_summary = ? AND valid_to >= ? AND retailer IS NOT NULL "
-        "ORDER BY price IS NULL, price, valid_from, retailer",
+        "WHERE watchlist_summary = ? AND valid_to >= ? AND retailer IS NOT NULL",
         (watchlist_summary, today.isoformat()),
     ).fetchall()
     return [

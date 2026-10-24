@@ -43,14 +43,17 @@ def format_todo_description(offer, today: date) -> str:
 
 
 def format_watchlist_description(offers, today: date) -> str | None:
-    """One line per store carrying a matched offer, cheapest first; None when no
-    offer is left, which clears the watchlist item's description."""
-    cheapest_per_store = {}
-    for offer in sorted(offers, key=lambda o: (o.price is None, o.price or 0.0, o.valid_from, o.retailer)):
-        cheapest_per_store.setdefault(offer.retailer, offer)
-    if not cheapest_per_store:
+    """One line per store for its cheapest offer valid today and one for its
+    cheapest upcoming offer; current offers first, each group cheapest first.
+    None when no offer is left, which clears the watchlist item's description."""
+    cheapest = {}
+    for offer in sorted(
+        offers, key=lambda o: (o.valid_from > today, o.price is None, o.price or 0.0, o.valid_from, o.retailer)
+    ):
+        cheapest.setdefault((offer.retailer, offer.valid_from > today), offer)
+    if not cheapest:
         return None
-    return "\n".join(format_todo_description(offer, today) for offer in cheapest_per_store.values())
+    return "\n".join(format_todo_description(offer, today) for offer in cheapest.values())
 
 
 def format_angebote_line(offer, today: date) -> str:

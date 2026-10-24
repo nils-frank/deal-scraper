@@ -17,7 +17,7 @@ def test_already_notified_after_record(conn):
     assert not store.already_notified(conn, offer, "Butter")
 
 
-def test_valid_offers_cheapest_first_and_includes_future(conn):
+def test_valid_offers_includes_future_and_skips_expired(conn):
     store.record_notified(conn, make_offer(offer_id="1", retailer="Markt B", price=1.29), "Frischkaese")
     store.record_notified(conn, make_offer(offer_id="2", retailer="Markt A", price=1.11), "Frischkaese")
     future = make_offer(offer_id="3", retailer="Markt C", price=0.99, valid_from=date(2026, 10, 26), valid_to=date(2026, 10, 31))
@@ -26,8 +26,11 @@ def test_valid_offers_cheapest_first_and_includes_future(conn):
     store.record_notified(conn, make_offer(offer_id="5"), "Butter")
 
     offers = store.valid_offers(conn, "Frischkaese", TODAY)
-    assert [(o.retailer, o.price) for o in offers] == [("Markt C", 0.99), ("Markt A", 1.11), ("Markt B", 1.29)]
-    assert offers[0].valid_from == date(2026, 10, 26)
+    assert sorted((o.retailer, o.price, o.valid_from) for o in offers) == [
+        ("Markt A", 1.11, date(2026, 10, 19)),
+        ("Markt B", 1.29, date(2026, 10, 19)),
+        ("Markt C", 0.99, date(2026, 10, 26)),
+    ]
 
 
 def test_offer_ending_today_is_still_valid(conn):

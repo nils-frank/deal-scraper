@@ -46,12 +46,21 @@ def test_watchlist_description_lists_every_store_cheapest_first():
     )
 
 
-def test_watchlist_description_keeps_cheapest_offer_per_store():
+def test_watchlist_description_keeps_cheapest_current_and_upcoming_offer_per_store():
     offers = [
         make_offer(offer_id="1", retailer="Markt A", price=1.49),
         make_offer(offer_id="2", retailer="Markt A", price=0.99, **NEXT_WEEK),
+        make_offer(offer_id="3", retailer="Markt A", price=1.29),
+        make_offer(offer_id="4", retailer="Markt A", price=1.09, **NEXT_WEEK),
+        make_offer(offer_id="5", retailer="Markt B", price=0.89, **NEXT_WEEK),
+        make_offer(offer_id="6", retailer="Markt B", price=1.39),
     ]
-    assert main.format_watchlist_description(offers, TODAY) == "0.99 € bei Markt A, gueltig ab 2026-10-26 bis 2026-10-31"
+    assert main.format_watchlist_description(offers, TODAY) == (
+        "1.29 € bei Markt A, gueltig bis 2026-10-24\n"
+        "1.39 € bei Markt B, gueltig bis 2026-10-24\n"
+        "0.89 € bei Markt B, gueltig ab 2026-10-26 bis 2026-10-31\n"
+        "0.99 € bei Markt A, gueltig ab 2026-10-26 bis 2026-10-31"
+    )
 
 
 def test_watchlist_description_is_none_without_offers():

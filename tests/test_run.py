@@ -87,7 +87,7 @@ def test_expired_offer_is_cleared_from_watchlist(env):
     assert ha.pushes == []
 
 
-def test_all_stores_listed_cheapest_first_and_future_offer_marked(env):
+def test_all_stores_listed_current_first_and_future_offer_marked(env):
     ha = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
     env.offers["Frischkaese"] = [
         make_offer(offer_id="1", title="Frischkaese Natur", retailer="Markt B", price=1.11),
@@ -100,9 +100,9 @@ def test_all_stores_listed_cheapest_first_and_future_offer_marked(env):
     main.run()
 
     assert ha.watchlist_description("w1") == (
-        "0.99 € bei Markt C, gueltig ab 2026-10-26 bis 2026-10-31\n"
         "1.11 € bei Markt A, gueltig bis 2026-10-24\n"
-        "1.11 € bei Markt B, gueltig bis 2026-10-24"
+        "1.11 € bei Markt B, gueltig bis 2026-10-24\n"
+        "0.99 € bei Markt C, gueltig ab 2026-10-26 bis 2026-10-31"
     )
     angebote = ha.lists[main.ANGEBOTE_ENTITY_ID]
     assert [i["summary"] for i in angebote] == ["Frischkaese"]
