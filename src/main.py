@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import Counter
 from datetime import date
 
 import ha_client
@@ -28,16 +29,70 @@ DASHBOARD_PATH = os.environ.get("DASHBOARD_PATH", "/lovelace/deal-scraper")
 OFFERS_PER_QUERY = 40
 
 
-def format_todo_description(offer) -> str:
+def format_validity(offer, today: date) -> str:
+    """An offer that starts after today gets its start date too, so next week's
+    flyer offer doesn't read as available now."""
+    if offer.valid_from > today:
+        return f"gueltig ab {offer.valid_from.isoformat()} bis {offer.valid_to.isoformat()}"
+    return f"gueltig bis {offer.valid_to.isoformat()}"
+
+
+def format_todo_description(offer, today: date) -> str:
     price = f"{offer.price:.2f} €" if offer.price is not None else "?"
-    return f"{price} bei {offer.retailer}, gueltig bis {offer.valid_to.isoformat()}"
+    return f"{price} bei {offer.retailer}, {format_validity(offer, today)}"
 
 
-def format_angebote_line(offer) -> str:
+def markdown_list(lines) -> str:
+    """HA renders to-do descriptions as markdown, where a bare newline is only a
+    soft break, so each line goes out as a list item to stay on its own line."""
+    return "\n".join(f"- {line}" for line in lines)
+
+
+def format_watchlist_description(offers, today: date) -> str | None:
+    """One line per store for its cheapest offer valid today and one for its
+    cheapest upcoming offer; current offers first, each group cheapest first.
+    None when no offer is left, which clears the watchlist item's description."""
+    cheapest = {}
+    for offer in sorted(
+        offers, key=lambda o: (o.valid_from > today, o.price is None, o.price or 0.0, o.valid_from, o.retailer)
+    ):
+        cheapest.setdefault((offer.retailer, offer.valid_from > today), offer)
+    if not cheapest:
+        return None
+    return markdown_list(format_todo_description(offer, today) for offer in cheapest.values())
+
+
+def format_angebote_line(offer, today: date) -> str:
     """One line per store for the Angebote to-do item's description - keeps the
     product detail (pack size etc., only present in offer.title) alongside the
     price/store/validity, since the item's summary is just the watchlist name."""
-    return f"{offer.title} - {format_todo_description(offer)}"
+    return f"{offer.title} - {format_todo_description(offer, today)}"
+
+
+def format_push_message(offers, today: date) -> str:
+    future_starts = Counter(offer.valid_from for offer in offers if offer.valid_from > today)
+    if not future_starts:
+        return f"{len(offers)} neue(s) Angebot(e) gefunden - siehe Einkaufsliste."
+    starts = ", ".join(f"{count} ab {start.isoformat()}" for start, count in sorted(future_starts.items()))
+    return f"{len(offers)} neue(s) Angebot(e) gefunden, davon {starts} - siehe Einkaufsliste."
+
+
+def sync_watchlist_descriptions(conn, watchlist: list[dict], today: date) -> None:
+    """Rewrites every watchlist item's description from its recorded offers that
+    are still valid, clearing it once none are left. Items whose description is
+    already correct are not written again."""
+    for item in watchlist:
+        if not item["uid"]:
+            continue
+        description = format_watchlist_description(store.valid_offers(conn, item["summary"], today), today)
+        if description == (item.get("description") or None):
+            continue
+        try:
+            ha_client.update_todo_item_description(TODO_ENTITY_ID, item["uid"], description)
+        except Exception:
+            log.exception("Todo description update failed for %r, continuing.", item["summary"])
+            continue
+        item["description"] = description
 
 
 def run() -> int:
@@ -51,16 +106,18 @@ def run() -> int:
         return 0
     log.info("Watchlist (%d items): %s", len(watchlist), [i["summary"] for i in watchlist])
 
-    new_match_count = 0
+    today = date.today()
+    notified_offers = []
     escalation_count = 0
 
     with store.open_store(DB_PATH) as conn:
-        stale_angebote = store.prune_expired(conn, date.today())
+        stale_angebote = store.prune_expired(conn, today)
         for summary in stale_angebote:
             try:
                 ha_client.remove_todo_item(ANGEBOTE_ENTITY_ID, summary)
             except Exception:
                 log.exception("Angebote list removal failed for %r, continuing.", summary)
+        sync_watchlist_descriptions(conn, watchlist, today)
 
         angebote_by_summary = {i["summary"]: i for i in ha_client.get_todo_items(ANGEBOTE_ENTITY_ID)}
 
@@ -88,18 +145,11 @@ def run() -> int:
 
                 if store.already_notified(conn, result.offer, item_summary):
                     log.info("  SKIP (dedup): %r already notified for item %r", result.offer.title, item_summary)
+                    # Refreshes the row's display details for the watchlist description.
+                    store.record_notified(conn, result.offer, item_summary, item_summary)
                     continue
 
-                offer = result.offer
-                if item["uid"]:
-                    try:
-                        ha_client.update_todo_item_description(
-                            TODO_ENTITY_ID, item["uid"], format_todo_description(offer)
-                        )
-                    except Exception:
-                        log.exception("Todo description update failed for %r, continuing.", item_summary)
-
-                new_offers.append((result.score, offer))
+                new_offers.append((result.score, result.offer))
 
             if not new_offers:
                 continue
@@ -108,17 +158,19 @@ def run() -> int:
             # it succeeds - a failed call leaves nothing recorded and the next run
             # retries all of it, same retry-safety as the old per-offer add_item.
             existing = angebote_by_summary.get(item_summary)
-            new_lines = [format_angebote_line(offer) for _, offer in new_offers]
+            new_lines = [format_angebote_line(offer, today) for _, offer in new_offers]
             try:
                 if existing and existing.get("uid"):
                     prior_lines = [
-                        line for line in (existing.get("description") or "").split("\n") if line.strip()
+                        line.removeprefix("- ")
+                        for line in (existing.get("description") or "").split("\n")
+                        if line.strip()
                     ]
                     ha_client.update_todo_item_description(
-                        ANGEBOTE_ENTITY_ID, existing["uid"], "\n".join(prior_lines + new_lines)
+                        ANGEBOTE_ENTITY_ID, existing["uid"], markdown_list(prior_lines + new_lines)
                     )
                 else:
-                    ha_client.add_todo_item(ANGEBOTE_ENTITY_ID, item_summary, "\n".join(new_lines))
+                    ha_client.add_todo_item(ANGEBOTE_ENTITY_ID, item_summary, markdown_list(new_lines))
             except Exception:
                 log.exception(
                     "Angebote list upsert failed for %r, not recording dedup so next run retries.",
@@ -128,15 +180,16 @@ def run() -> int:
 
             for score, offer in new_offers:
                 store.record_notified(conn, offer, item_summary, item_summary)
-                new_match_count += 1
+                notified_offers.append(offer)
                 log.info("  NEW MATCH (score=%.0f): %s bei %s", score, offer.title, offer.retailer)
 
-    if new_match_count:
-        message = f"{new_match_count} neue(s) Angebot(e) gefunden - siehe Einkaufsliste."
+        sync_watchlist_descriptions(conn, watchlist, today)
+
+    if notified_offers:
         try:
             ha_client.notify(
                 NOTIFY_SERVICE,
-                message,
+                format_push_message(notified_offers, today),
                 title="Prospekt-Check",
                 data={"tag": "deal-scraper", "url": DASHBOARD_PATH},
             )
@@ -145,7 +198,7 @@ def run() -> int:
 
     log.info(
         "Done. %d new match(es), %d escalated to the local model.",
-        new_match_count,
+        len(notified_offers),
         escalation_count,
     )
     return 0

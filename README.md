@@ -50,6 +50,13 @@ docker run --rm --env-file .env -v $(pwd)/data:/data deal-scraper:local
 See `deploy/` for an example systemd service + timer pair to run it twice weekly, and
 `.env.example` for every configuration value.
 
+Tests use synthetic offers only and need no network access:
+
+```bash
+pip install -r requirements.txt pytest
+pytest
+```
+
 ## Stack
 
 Plain `requests` against Marktguru's search API and Home Assistant's REST API,
