@@ -22,6 +22,9 @@ from schema import Offer
 log = logging.getLogger(__name__)
 
 HOME_URL = "https://www.marktguru.de"
+# Same image URL the Marktguru web frontend uses for an offer's thumbnail; it is
+# derived from the offer id, so it costs no extra request.
+IMAGE_URL_TEMPLATE = "https://cdn.marktguru.de/api/v1/offers/{offer_id}/images/default/0/small.webp"
 SEARCH_ENDPOINT = "https://api.marktguru.de/api/v1/offers/search"
 REQUEST_TIMEOUT = 15
 
@@ -114,6 +117,8 @@ def _offer_to_normalized(raw: dict, plz: str) -> Optional[Offer]:
         log.debug("Dropping offer_id=%s title=%r: no valid validityDates (%r)", offer_id, title, validity)
         return None
 
+    has_image = offer_id.isdigit() and (raw.get("images") or {}).get("count", 1) != 0
+
     return Offer(
         title=title,
         brand=brand_name,
@@ -124,7 +129,7 @@ def _offer_to_normalized(raw: dict, plz: str) -> Optional[Offer]:
         plz=plz,
         valid_from=valid_from,
         valid_to=valid_to,
-        image_url=None,
+        image_url=IMAGE_URL_TEMPLATE.format(offer_id=offer_id) if has_image else None,
         source_url=f"https://www.marktguru.de/offers/{offer_id}" if offer_id.isdigit() else None,
         offer_id=f"marktguru:{offer_id}",
     )

@@ -1,19 +1,24 @@
 # Local Grocery Deal Aggregator — Implementation Plan
 
-**Status:** Implemented and deployed on `the target host` (namespace `deal-scraper`,
-CronJob Mon/Thu 08:00). For day-to-day operation, manual triggering, and
-troubleshooting, see the "Deal scraper" section in `OPERATIONS.md` — that is
-now the maintained runbook. This document stays as the design record: the
-"Decisions" below are what was actually built, unchanged since planning.
+**Status:** Implemented and running on `raspi4-02` as a systemd timer
+(Mon/Thu 08:00) that starts the image with `docker run --rm`, see `deploy/`.
+It moved there on 2026-08-21; before that it ran as a k3s CronJob, which is
+what the deployment-related "Decisions" and the "Deployment layout" below were
+written for. For day-to-day operation, manual triggering, and troubleshooting,
+see the "Deal scraper" section in `OPERATIONS.md` - that is now the maintained
+runbook. This document stays as the design record: apart from the deployment
+change and the kaufda.de fallback (planned, never built), the "Decisions"
+below are what was actually built.
 
 **Notification design** (decided after the "Decisions" below were already
 locked, once a plain single push per match proved easy to miss): each run
-sets the matched to-do item's description (store/price/validity), pushes the
-full match list to a live-updating dashboard view ("Angebote",
-`lovelace/deal-scraper`), and sends **one** consolidated push per run instead
-of one per match. See `OPERATIONS.md` for the current known issues with this
-(tap-to-navigate on the push not yet working; a last-write-wins gap when two
-offers match the same watchlist item).
+rewrites every watchlist to-do item's description from its still-valid matched
+offers (one line per store, cheapest first, cleared once all of them have
+expired), pushes the full match list to a live-updating dashboard view
+("Angebote", `lovelace/deal-scraper`), and sends **one** consolidated push per
+run instead of one per match. An offer that starts later shows "ab <date>" in
+the descriptions and the push. See `OPERATIONS.md` for the current known issues
+with this (tap-to-navigate on the push not yet working).
 
 **Purpose of this document:** standalone handoff brief for an **implementation
 agent** with no prior conversation context. It contains the research background,
@@ -38,6 +43,12 @@ inject advertising.
 
 Locked during the planning session. Each entry states the decision and why, so a
 later agent can judge whether a changed constraint still supports it.
+
+Superseded on 2026-08-21: the target node, the k3s deployment shape, the k8s
+CronJob scheduler, the k8s Secret for the token and the `local-path` PVC. The
+job now runs on `raspi4-02` from a systemd timer, reads the token from an env
+file, and keeps SQLite on a host directory mounted into the container (see
+"Deployment layout"). The entries are kept as written for the reasoning.
 
 - **Target node: `the target host`** (k3s agent, 3.7GB RAM, the homelab's established
   "apps node" — see `ARCHITECTURE.md` §3, §5.2). Checked live at planning time:
@@ -138,7 +149,7 @@ All resolved as of this planning session:
 | **ha-rewe** | Home Assistant custom component exposing REWE Prospekt discounts as a sensor; can drive HA automations directly. | — | https://github.com/FaserF/ha-rewe |
 | **rewe-discounts** | Standalone Python/Go script hitting REWE's undocumented API. Documented case of the endpoint breaking after REWE started requiring an app certificate/private key — a concrete example of reverse-engineered-API fragility. | — | https://github.com/foo-git/rewe-discounts |
 | **brochr** | Small Android app, same pattern against REWE + EDEKA's own offer APIs. | — | https://github.com/mkfrey/brochr |
-| **kaufda.de embedded JSON** | kaufda.de (same parent company as Marktguru, Bonial) ships a full JSON data layer embedded in the page — parseable without a headless browser. Useful as a secondary source for branches Marktguru misses. | n/a (site behavior, not a packaged tool) | — |
+| **kaufda.de embedded JSON** | kaufda.de (same parent company as Marktguru, Bonial) ships a full JSON data layer embedded in the page — parseable without a headless browser. Useful as a secondary source for branches Marktguru misses. **Not built:** the planned fallback fetcher does not exist. | n/a (site behavior, not a packaged tool) | — |
 | **changedetection.io** | Generic self-hosted website/price change monitor. Docker, CSS-selector/JSONPath targeting, Apprise notification backend (85+ channels incl. ntfy, Telegram, webhook, HA-compatible webhook). Not deal-aware — no unified schema, no watchlist matching, just diffing. Useful as a fallback for individual product pages, not as the core engine. | AGPL | https://github.com/dgtlmoon/changedetection.io |
 
 **Key insight:** Marktguru is itself an aggregator across most major German chains.
@@ -165,10 +176,11 @@ No model above ~3B is worth considering for this workload.
 
 ## Final architecture
 
-Single CronJob pod, one container image, four stages run in sequence per invocation:
+One container run per timer trigger, one image, four stages run in sequence per
+invocation:
 
-1. **Fetch** — HTTP JSON calls against Marktguru (primary) and kaufda.de (fallback
-   for gaps). Negligible compute.
+1. **Fetch** - HTTP JSON calls against Marktguru. Negligible compute. The
+   kaufda.de fallback for gaps was planned but never built.
 2. **Normalize** — maps all sources into one schema: `title, brand, price,
    unit_price, unit, retailer, plz, valid_from, valid_to, image_url, source_url`.
    Handles German number formatting (comma decimals, "1,25 l" etc.).
@@ -180,22 +192,28 @@ Single CronJob pod, one container image, four stages run in sequence per invocat
 
 ## Deployment layout
 
-Mirrors `k8s/mealie/`:
+A systemd timer on `raspi4-02` starts a oneshot service, which runs the locally
+built image with `docker run --rm` and exits when the run is done:
 
 ```
-k8s/deal-scraper/
-├── 00-namespace.yaml   # the deal-scraper Namespace
-├── bootstrap.sh        # creates namespace + HA token Secret if missing, applies in order
-├── deal-scraper.yaml   # PVC (SQLite) + CronJob
+deploy/
+├── deal-scraper.service   # oneshot: docker run --rm --env-file ... -v <host dir>:/data
+├── deal-scraper.timer     # OnCalendar=Mon,Thu 08:00, Persistent=true
 ```
 
-No separate database pod (SQLite, same as Mealie), no NAS PV (nothing here needs
-NFS — the SQLite file is disposable dedup state, not a document store), no Service
-(nothing needs to be reached from outside the pod).
+Configuration and the HA token come from an env file on the host (see
+`.env.example`), never from the repo. The SQLite file lives in a host directory
+mounted at `/data`. No database container, no NAS mount (the SQLite file is
+disposable dedup state, not a document store), no port (nothing needs to reach
+the container).
 
 ---
 
 ## Suggested build order for the implementation agent
+
+Historical: this is the original plan. The kaufda.de fallback (step 2) was never
+built, and steps 6, 8 and 9 were later replaced by the systemd timer on
+`raspi4-02` described in "Deployment layout".
 
 1. Confirm the two "Open questions" above against live HA state.
 2. Scaffold the fetcher against the Marktguru API (reference: openclaw-supermarket-deals)

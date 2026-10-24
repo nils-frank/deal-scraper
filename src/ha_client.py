@@ -53,9 +53,10 @@ def get_todo_items(entity_id: str) -> list[dict]:
     return result
 
 
-def update_todo_item_description(entity_id: str, uid: str, description: str) -> None:
+def update_todo_item_description(entity_id: str, uid: str, description: str | None) -> None:
     """POST todo/update_item - sets the item's description field (visible when the
-    todo list item is expanded in the app), without touching its summary or status."""
+    todo list item is expanded in the app), without touching its summary or status.
+    A description of None clears the field."""
     log.info("POST %s/api/services/todo/update_item uid=%s description=%r", HA_URL, uid, description)
     resp = requests.post(
         f"{HA_URL}/api/services/todo/update_item",

@@ -1,13 +1,16 @@
 """SQLite dedup store, keyed on offer ID + validity window.
 
-Lives on a local-path PVC (see k8s/deal-scraper/deal-scraper.yaml). Same pattern
-as Mealie's SQLite-on-PVC deployment - see DESIGN.md.
+Lives on the host volume mounted at /data (see deploy/deal-scraper.service).
+Each row also keeps the display details (title, retailer, price) of the offer it
+dedups, so the watchlist descriptions can be rebuilt from the still-valid rows on
+every run instead of only when a new match arrives.
 """
 from __future__ import annotations
 
 import logging
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date
 
 from schema import Offer
@@ -25,6 +28,24 @@ CREATE TABLE IF NOT EXISTS notified_offers (
 );
 """
 
+# Columns added after the first deployment, as (name, SQL type). Rows written
+# before a column existed keep NULL in it until the offer is matched again.
+ADDED_COLUMNS = [
+    ("angebote_summary", "TEXT"),
+    ("title", "TEXT"),
+    ("retailer", "TEXT"),
+    ("price", "REAL"),
+]
+
+
+@dataclass(frozen=True)
+class StoredOffer:
+    title: str
+    retailer: str
+    price: float | None
+    valid_from: date
+    valid_to: date
+
 
 @contextmanager
 def open_store(db_path: str):
@@ -32,11 +53,12 @@ def open_store(db_path: str):
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(SCHEMA)
-        try:
-            conn.execute("ALTER TABLE notified_offers ADD COLUMN angebote_summary TEXT")
-        except sqlite3.OperationalError as e:
-            if "duplicate column" not in str(e):
-                raise
+        for name, sql_type in ADDED_COLUMNS:
+            try:
+                conn.execute(f"ALTER TABLE notified_offers ADD COLUMN {name} {sql_type}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e):
+                    raise
         # Backfill rows written before this column existed - watchlist_summary and
         # angebote_summary were always the same string at every call site, so this
         # is exact, not a guess. Without it, those old rows stay invisible to
@@ -69,19 +91,49 @@ def already_notified(conn: sqlite3.Connection, offer: Offer, watchlist_summary: 
 def record_notified(
     conn: sqlite3.Connection, offer: Offer, watchlist_summary: str, angebote_summary: str | None = None
 ) -> None:
+    """Inserts the dedup row, or refreshes the display details of an existing one
+    (which also backfills rows written before those columns existed)."""
     conn.execute(
-        "INSERT OR IGNORE INTO notified_offers "
-        "(offer_id, valid_from, valid_to, watchlist_summary, angebote_summary) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO notified_offers "
+        "(offer_id, valid_from, valid_to, watchlist_summary, angebote_summary, title, retailer, price) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (offer_id, valid_from, valid_to, watchlist_summary) DO UPDATE SET "
+        "title = excluded.title, retailer = excluded.retailer, price = excluded.price",
         (
             offer.offer_id,
             offer.valid_from.isoformat(),
             offer.valid_to.isoformat(),
             watchlist_summary,
             angebote_summary,
+            offer.title,
+            offer.retailer,
+            offer.price,
         ),
     )
     conn.commit()
     log.info("Recorded dedup row offer_id=%s item=%r", offer.offer_id, watchlist_summary)
+
+
+def valid_offers(conn: sqlite3.Connection, watchlist_summary: str, today: date) -> list[StoredOffer]:
+    """Every recorded offer for this watchlist item that has not ended before
+    `today` (offers starting later are included), cheapest first. Rows without
+    display details (written before those columns existed) are skipped."""
+    rows = conn.execute(
+        "SELECT title, retailer, price, valid_from, valid_to FROM notified_offers "
+        "WHERE watchlist_summary = ? AND valid_to >= ? AND retailer IS NOT NULL "
+        "ORDER BY price IS NULL, price, valid_from, retailer",
+        (watchlist_summary, today.isoformat()),
+    ).fetchall()
+    return [
+        StoredOffer(
+            title=title,
+            retailer=retailer,
+            price=price,
+            valid_from=date.fromisoformat(valid_from),
+            valid_to=date.fromisoformat(valid_to),
+        )
+        for title, retailer, price, valid_from, valid_to in rows
+    ]
 
 
 def prune_expired(conn: sqlite3.Connection, before: date) -> list[str]:
