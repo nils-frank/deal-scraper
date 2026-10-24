@@ -205,6 +205,42 @@ def test_ended_offer_from_stored_fetch_is_not_pushed_again(env):
     assert env.escalations == []
 
 
+def test_ended_offer_is_not_pushed_again_once_the_budget_is_spent(env):
+    ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
+    env.marktguru.results["Frischkaese"] = [frischkaese(1, "Markt A", 1.11)]
+    watchlist_run.run()
+    env.advance(days=4)
+    monday = NOW + timedelta(days=4)
+    with store.open_store(env.db_path) as conn:
+        for i in range(marktguru.DAILY_BUDGET):
+            store.reserve_search(conn, f"frage {i}", "00000", monday, monday - timedelta(hours=1), marktguru.DAILY_BUDGET)
+    calls_before = len(env.marktguru.calls)
+    ha_fake.pushes.clear()
+
+    assert watchlist_run.run() == 0
+
+    assert len(env.marktguru.calls) == calls_before
+    assert ha_fake.lists[watchlist_run.ANGEBOTE_ENTITY_ID] == []
+    assert ha_fake.watchlist_description("w1") is None
+    assert ha_fake.pushes == []
+
+
+def test_offer_ended_overnight_is_not_pushed_again_from_the_cache(env):
+    ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
+    env.marktguru.results["Frischkaese"] = [frischkaese(1, "Markt A", 1.11, valid_to=date(2026, 10, 22))]
+    env.advance(hours=13)  # 22:00 on the offer's last day
+    watchlist_run.run()
+    assert len(ha_fake.pushes) == 1
+    env.advance(hours=10)  # 08:00 the next morning, the search is still cached
+    ha_fake.pushes.clear()
+
+    assert watchlist_run.run() == 0
+
+    assert env.marktguru.searches == ["Frischkaese"]
+    assert ha_fake.lists[watchlist_run.ANGEBOTE_ENTITY_ID] == []
+    assert ha_fake.pushes == []
+
+
 def test_exhausted_budget_makes_no_request(env):
     ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
     with store.open_store(env.db_path) as conn:
