@@ -267,6 +267,17 @@ def test_speech_names_each_end_when_they_differ(conn, fake_marktguru):
     )
 
 
+def test_speech_names_a_single_upcoming_day_once(conn, fake_marktguru):
+    friday = SATURDAY + timedelta(days=6)
+    fake_marktguru.results["Butter"] = [
+        butter(1, "Almhof", "Butter", "Markt A", 0.99, 3.96, valid_from=friday, valid_to=friday),
+    ]
+    client = marktguru.Client(conn, "00000", session=fake_marktguru, clock=Clock(at(SATURDAY)))
+    assert query.format_speech(query.find_offers(client, "Butter"), at(SATURDAY)) == (
+        "Demnächst: nur am Freitag Almhof Butter 0,99 € bei Markt A."
+    )
+
+
 def test_line_merges_stores_by_what_is_shown(conn, fake_marktguru):
     fake_marktguru.results["Butter"] = [
         # Same price, different start dates that both lie in the past: one entry.

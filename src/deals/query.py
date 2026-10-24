@@ -202,6 +202,13 @@ def _spoken_day(day: date, today: date) -> str:
     return f"{day.day}. {MONTHS_DE[day.month - 1]}"
 
 
+def _spoken_span(offer: Offer, today: date) -> str:
+    start = _spoken_day(offer.valid_from, today)
+    if offer.valid_from == offer.valid_to:
+        return f"nur am {start}"
+    return f"ab {start} bis {_spoken_day(offer.valid_to, today)}"
+
+
 def _subject(query: str) -> str:
     query = query.strip()
     return query[:1].upper() + query[1:]
@@ -358,10 +365,7 @@ def format_speech(result: FindResult, now: datetime) -> str:
             sentences.append(f"{subject} im Angebot: {', '.join(phrases)}.")
     upcoming = [_spoken_group(g, today) for g in result.upcoming[:SPEECH_UPCOMING]]
     if upcoming:
-        phrases = [
-            f"ab {_spoken_day(offer.valid_from, today)} bis {_spoken_day(offer.valid_to, today)} {text}"
-            for text, offer in upcoming
-        ]
+        phrases = [f"{_spoken_span(offer, today)} {text}" for text, offer in upcoming]
         sentences.append(f"Demnächst: {', '.join(phrases)}.")
     if not sentences:
         sentences.append(f"Für {subject} habe ich gerade keine Angebote gefunden.")
