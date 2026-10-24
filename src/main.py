@@ -42,6 +42,12 @@ def format_todo_description(offer, today: date) -> str:
     return f"{price} bei {offer.retailer}, {format_validity(offer, today)}"
 
 
+def markdown_list(lines) -> str:
+    """HA renders to-do descriptions as markdown, where a bare newline is only a
+    soft break, so each line goes out as a list item to stay on its own line."""
+    return "\n".join(f"- {line}" for line in lines)
+
+
 def format_watchlist_description(offers, today: date) -> str | None:
     """One line per store for its cheapest offer valid today and one for its
     cheapest upcoming offer; current offers first, each group cheapest first.
@@ -53,7 +59,7 @@ def format_watchlist_description(offers, today: date) -> str | None:
         cheapest.setdefault((offer.retailer, offer.valid_from > today), offer)
     if not cheapest:
         return None
-    return "\n".join(format_todo_description(offer, today) for offer in cheapest.values())
+    return markdown_list(format_todo_description(offer, today) for offer in cheapest.values())
 
 
 def format_angebote_line(offer, today: date) -> str:
@@ -156,13 +162,15 @@ def run() -> int:
             try:
                 if existing and existing.get("uid"):
                     prior_lines = [
-                        line for line in (existing.get("description") or "").split("\n") if line.strip()
+                        line.removeprefix("- ")
+                        for line in (existing.get("description") or "").split("\n")
+                        if line.strip()
                     ]
                     ha_client.update_todo_item_description(
-                        ANGEBOTE_ENTITY_ID, existing["uid"], "\n".join(prior_lines + new_lines)
+                        ANGEBOTE_ENTITY_ID, existing["uid"], markdown_list(prior_lines + new_lines)
                     )
                 else:
-                    ha_client.add_todo_item(ANGEBOTE_ENTITY_ID, item_summary, "\n".join(new_lines))
+                    ha_client.add_todo_item(ANGEBOTE_ENTITY_ID, item_summary, markdown_list(new_lines))
             except Exception:
                 log.exception(
                     "Angebote list upsert failed for %r, not recording dedup so next run retries.",

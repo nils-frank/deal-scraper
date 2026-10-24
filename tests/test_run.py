@@ -100,13 +100,17 @@ def test_all_stores_listed_current_first_and_future_offer_marked(env):
     main.run()
 
     assert ha.watchlist_description("w1") == (
-        "1.11 € bei Markt A, gueltig bis 2026-10-24\n"
-        "1.11 € bei Markt B, gueltig bis 2026-10-24\n"
-        "0.99 € bei Markt C, gueltig ab 2026-10-26 bis 2026-10-31"
+        "- 1.11 € bei Markt A, gueltig bis 2026-10-24\n"
+        "- 1.11 € bei Markt B, gueltig bis 2026-10-24\n"
+        "- 0.99 € bei Markt C, gueltig ab 2026-10-26 bis 2026-10-31"
     )
     angebote = ha.lists[main.ANGEBOTE_ENTITY_ID]
     assert [i["summary"] for i in angebote] == ["Frischkaese"]
-    assert "Frischkaese Natur - 0.99 € bei Markt C, gueltig ab 2026-10-26 bis 2026-10-31" in angebote[0]["description"]
+    assert angebote[0]["description"] == (
+        "- Frischkaese Natur - 1.11 € bei Markt B, gueltig bis 2026-10-24\n"
+        "- Frischkaese Natur - 1.11 € bei Markt A, gueltig bis 2026-10-24\n"
+        "- Frischkaese Natur - 0.99 € bei Markt C, gueltig ab 2026-10-26 bis 2026-10-31"
+    )
     # The future offer is still pushed, now with its start date.
     assert ha.pushes == ["3 neue(s) Angebot(e) gefunden, davon 1 ab 2026-10-26 - siehe Einkaufsliste."]
 
@@ -132,4 +136,19 @@ def test_failed_fetch_keeps_still_valid_offers(env):
 
     main.run()
 
-    assert ha.watchlist_description("w1") == "1.11 € bei Markt A, gueltig bis 2026-10-24"
+    assert ha.watchlist_description("w1") == "- 1.11 € bei Markt A, gueltig bis 2026-10-24"
+
+
+def test_new_offer_extends_angebote_list_written_without_list_markers(env):
+    ha = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
+    ha.lists[main.ANGEBOTE_ENTITY_ID].append(
+        {"uid": "a1", "summary": "Frischkaese", "description": "Frischkaese Alt - 1.29 € bei Markt Z, gueltig bis 2026-10-24"}
+    )
+    env.offers["Frischkaese"] = [make_offer(title="Frischkaese Natur")]
+
+    main.run()
+
+    assert ha.lists[main.ANGEBOTE_ENTITY_ID][0]["description"] == (
+        "- Frischkaese Alt - 1.29 € bei Markt Z, gueltig bis 2026-10-24\n"
+        "- Frischkaese Natur - 1.11 € bei Markt A, gueltig bis 2026-10-24"
+    )

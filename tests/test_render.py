@@ -39,10 +39,10 @@ def test_watchlist_description_lists_every_store_cheapest_first():
         make_offer(retailer="Markt D", price=1.11),
     ]
     assert main.format_watchlist_description(offers, TODAY) == (
-        "1.11 € bei Markt A, gueltig bis 2026-10-24\n"
-        "1.11 € bei Markt D, gueltig bis 2026-10-24\n"
-        "1.29 € bei Markt C, gueltig bis 2026-10-24\n"
-        "? bei Markt B, gueltig bis 2026-10-24"
+        "- 1.11 € bei Markt A, gueltig bis 2026-10-24\n"
+        "- 1.11 € bei Markt D, gueltig bis 2026-10-24\n"
+        "- 1.29 € bei Markt C, gueltig bis 2026-10-24\n"
+        "- ? bei Markt B, gueltig bis 2026-10-24"
     )
 
 
@@ -56,10 +56,10 @@ def test_watchlist_description_keeps_cheapest_current_and_upcoming_offer_per_sto
         make_offer(offer_id="6", retailer="Markt B", price=1.39),
     ]
     assert main.format_watchlist_description(offers, TODAY) == (
-        "1.29 € bei Markt A, gueltig bis 2026-10-24\n"
-        "1.39 € bei Markt B, gueltig bis 2026-10-24\n"
-        "0.89 € bei Markt B, gueltig ab 2026-10-26 bis 2026-10-31\n"
-        "0.99 € bei Markt A, gueltig ab 2026-10-26 bis 2026-10-31"
+        "- 1.29 € bei Markt A, gueltig bis 2026-10-24\n"
+        "- 1.39 € bei Markt B, gueltig bis 2026-10-24\n"
+        "- 0.89 € bei Markt B, gueltig ab 2026-10-26 bis 2026-10-31\n"
+        "- 0.99 € bei Markt A, gueltig ab 2026-10-26 bis 2026-10-31"
     )
 
 
