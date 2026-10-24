@@ -368,17 +368,6 @@ def fetch_offers(conn: sqlite3.Connection, fetch_id: int) -> list[Offer]:
     return [_row_to_offer(row) for row in rows]
 
 
-def current_offers(conn: sqlite3.Connection, today: date) -> tuple[list[Offer], datetime | None]:
-    """Every stored offer that has not ended before `today`, and when the newest
-    of them was last fetched."""
-    rows = conn.execute(
-        f"SELECT {', '.join(OFFER_COLUMNS)}, last_seen FROM offers WHERE valid_to >= ? ORDER BY offer_key",
-        (today.isoformat(),),
-    ).fetchall()
-    newest = max((row[-1] for row in rows), default=None)
-    return [_row_to_offer(row[:-1]) for row in rows], datetime.fromisoformat(newest) if newest else None
-
-
 def _offer_values(offer: Offer) -> tuple:
     return (
         offer.offer_id, offer.retailer, offer.brand, offer.product, offer.description, offer.category,

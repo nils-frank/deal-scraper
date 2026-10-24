@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from deals import store
 from deals.marktguru import DAILY_BUDGET, Client
 from deals.match import MatchDecision, MatchMethod, classify_all
 from deals.schema import Offer, local_date
@@ -140,12 +139,8 @@ def find_offers(
 ) -> FindResult:
     today = today or local_date(client.clock())
     search = client.search_narrowing(query)
-    offers, fetched_at = search.offers, search.fetched_at
-    if not offers and search.error:
-        # Never fetched and Marktguru unavailable: answer from every stored offer.
-        offers, fetched_at = store.current_offers(client.conn, today)
 
-    results = classify_all(query, offers)
+    results = classify_all(query, search.offers)
     excluded = Counter(r.offer.category for r in results if r.method == MatchMethod.CATEGORY)
     relevant = [r.offer for r in results if r.decision != MatchDecision.NO_MATCH]
     if stores:
@@ -160,7 +155,7 @@ def find_offers(
         reference_day=reference_day(today),
         current=group_offers(current, limit),
         upcoming=group_offers(upcoming, limit),
-        fetched_at=fetched_at,
+        fetched_at=search.fetched_at,
         source=search.source,
         budget_left=search.budget_left,
         daily_budget=client.daily_budget,
@@ -346,7 +341,7 @@ def _spoken_group(group: OfferGroup, today: date) -> tuple[str, Offer]:
 def format_speech(result: FindResult, now: datetime) -> str:
     """A short German answer for Home Assistant Assist, without the LLM:
     "Butter im Angebot: Almhof Butter 0,99 € bei Markt A, ..., alle bis heute.
-    Demnächst: ab Montag Weidegold Butter 1,49 € bei Markt C." """
+    Demnächst: ab Montag bis Samstag Weidegold Butter 1,49 € bei Markt C." """
     today = result.today
     subject = _subject(result.query)
     sentences = []
@@ -363,7 +358,10 @@ def format_speech(result: FindResult, now: datetime) -> str:
             sentences.append(f"{subject} im Angebot: {', '.join(phrases)}.")
     upcoming = [_spoken_group(g, today) for g in result.upcoming[:SPEECH_UPCOMING]]
     if upcoming:
-        phrases = [f"ab {_spoken_day(offer.valid_from, today)} {text}" for text, offer in upcoming]
+        phrases = [
+            f"ab {_spoken_day(offer.valid_from, today)} bis {_spoken_day(offer.valid_to, today)} {text}"
+            for text, offer in upcoming
+        ]
         sentences.append(f"Demnächst: {', '.join(phrases)}.")
     if not sentences:
         sentences.append(f"Für {subject} habe ich gerade keine Angebote gefunden.")

@@ -48,7 +48,7 @@ def test_find_speech(fake, capsys):
     cli.main(["find", "Frischkaese", "--speech"])
     assert capsys.readouterr().out.strip() == (
         "Frischkaese im Angebot: Testmarke Frischkaese 1,11 € bei Markt A bis Samstag. "
-        "Demnächst: ab Montag Testmarke Frischkaese 0,99 € bei Markt B."
+        "Demnächst: ab Montag bis 31. Oktober Testmarke Frischkaese 0,99 € bei Markt B."
     )
 
 

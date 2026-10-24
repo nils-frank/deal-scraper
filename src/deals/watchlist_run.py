@@ -128,7 +128,7 @@ def run() -> int:
             item_summary = item["summary"]
             log.info("--- Item %d/%d: %r (uid=%s) ---", idx, len(watchlist), item_summary, item["uid"])
             search = client.search_narrowing(item_summary)
-            offers = search.offers
+            offers = [offer for offer in search.offers if offer.valid_to >= today]
             log.info(
                 "  %r: %d candidate offers from Marktguru (%s, fetched %s)",
                 item_summary, len(offers), search.source, search.fetched_at,

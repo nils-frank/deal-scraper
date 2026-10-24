@@ -189,6 +189,22 @@ def test_failed_fetch_keeps_still_valid_offers(env):
     assert ha_fake.pushes == []
 
 
+def test_ended_offer_from_stored_fetch_is_not_pushed_again(env):
+    ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
+    env.marktguru.results["Frischkaese"] = [frischkaese(1, "Markt A", 1.11)]
+    watchlist_run.run()
+    env.advance(days=4)
+    env.marktguru.fail = requests.ConnectionError("down")
+    ha_fake.pushes.clear()
+
+    assert watchlist_run.run() == 0
+
+    assert ha_fake.lists[watchlist_run.ANGEBOTE_ENTITY_ID] == []
+    assert ha_fake.watchlist_description("w1") is None
+    assert ha_fake.pushes == []
+    assert env.escalations == []
+
+
 def test_exhausted_budget_makes_no_request(env):
     ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
     with store.open_store(env.db_path) as conn:

@@ -164,7 +164,7 @@ def test_speech_output(saturday):
     assert query.format_speech(result, at(SATURDAY)) == (
         "Butter im Angebot: Almhof Butter 0,99 € bei Markt A, Bergwiese Feine Butter 1,29 € bei Markt B und Markt C, "
         "Kleehof Butter 1,69 € bei Markt D, alle bis heute. "
-        "Demnächst: ab Montag Weidegold Beste Butter 1,49 € bei Markt F."
+        "Demnächst: ab Montag bis 31. Oktober Weidegold Beste Butter 1,49 € bei Markt F."
     )
 
 
@@ -210,24 +210,36 @@ def test_store_filter(saturday):
     assert [(g.name, [o.retailer for o in g.offers]) for g in result.current] == [("Bergwiese Feine Butter", ["Markt C"])]
 
 
-def test_unknown_query_falls_back_to_every_stored_offer(saturday, fake_marktguru):
+def test_failed_search_answers_from_the_stored_fetch_of_that_query(saturday, fake_marktguru):
     query.find_offers(saturday, "Butter")
     fetched = saturday.clock()
-    saturday.clock.advance(hours=2)
+    saturday.clock.advance(hours=13)
+    fake_marktguru.fail = requests.ConnectionError("down")
+
+    result = query.find_offers(saturday, "Butter")
+
+    assert result.source == "store"
+    assert result.fetched_at == fetched
+    assert [g.name for g in result.current][:1] == ["Almhof Butter"]
+    text = query.format_text(result, saturday.clock())
+    assert text.endswith(
+        "Marktguru not asked (Marktguru error: down); stored offers fetched 13 hours ago.\n"
+        # The failed search counts too.
+        "28 of 30 live searches left today."
+    )
+    assert query.format_speech(result, saturday.clock()).endswith("Stand: vor 13 Stunden.")
+
+
+def test_failed_search_never_answers_from_other_queries(saturday, fake_marktguru):
+    query.find_offers(saturday, "Butter")
     fake_marktguru.fail = requests.ConnectionError("down")
 
     result = query.find_offers(saturday, "Almhof")
 
     assert result.source == "store"
-    assert result.fetched_at == fetched
-    assert [g.name for g in result.current] == ["Almhof Butterkaese", "Almhof Butter"]
-    text = query.format_text(result, saturday.clock())
-    assert text.endswith(
-        "Marktguru not asked (Marktguru error: down); stored offers fetched 2 hours ago.\n"
-        # The failed search counts too.
-        "28 of 30 live searches left today."
-    )
-    assert query.format_speech(result, saturday.clock()).endswith("Stand: vor 2 Stunden.")
+    assert result.fetched_at is None
+    assert result.current == [] and result.upcoming == []
+    assert query.format_speech(result, saturday.clock()) == "Für Almhof habe ich gerade keine Angebote gefunden."
 
 
 def test_nothing_found(conn, fake_marktguru):

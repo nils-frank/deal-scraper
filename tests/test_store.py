@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import date
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from conftest import NOW, TODAY, make_offer
 from deals import store
@@ -173,9 +173,6 @@ def test_offers_round_trip(conn):
                        image_url="https://example.invalid/1.webp", source_url="https://example.invalid/1")
     fetch_id = _fetch(conn, NOW, [offer])
     assert store.fetch_offers(conn, fetch_id) == [offer]
-    offers, newest = store.current_offers(conn, TODAY)
-    assert offers == [offer]
-    assert newest == NOW.astimezone(timezone.utc).replace(microsecond=0)
 
 
 def test_kv_round_trip(conn):
