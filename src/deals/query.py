@@ -69,7 +69,7 @@ class FindResult:
             return {
                 "name": group.name,
                 "offers": [
-                    {**offer.to_dict(), "validity": validity_label_de(offer, self.today)} for offer in group.offers
+                    {**offer.to_dict(), "validity": validity_span(offer, self.today, "de")} for offer in group.offers
                 ],
             }
 
@@ -175,23 +175,6 @@ def _day_de(day: date) -> str:
     return f"{WEEKDAYS_DE[day.weekday()]} {day.day:02d}.{day.month:02d}."
 
 
-def validity_label_en(offer: Offer, today: date) -> str:
-    if offer.valid_from > today:
-        return f"from {_day_en(offer.valid_from)} until {_day_en(offer.valid_to)}"
-    if offer.valid_to == today:
-        return f"until today ({_day_en(offer.valid_to)})"
-    return f"until {_day_en(offer.valid_to)}"
-
-
-def validity_label_de(offer: Offer, today: date) -> str:
-    """German label, e.g. "bis Sa 24.10.", "ab Mo 26.10. bis Sa 31.10." or "bis heute (Sa 24.10.)"."""
-    if offer.valid_from > today:
-        return f"ab {_day_de(offer.valid_from)} bis {_day_de(offer.valid_to)}"
-    if offer.valid_to == today:
-        return f"bis heute ({_day_de(offer.valid_to)})"
-    return f"bis {_day_de(offer.valid_to)}"
-
-
 def _spoken_day(day: date, today: date) -> str:
     if day == today:
         return "heute"
@@ -202,11 +185,29 @@ def _spoken_day(day: date, today: date) -> str:
     return f"{day.day}. {MONTHS_DE[day.month - 1]}"
 
 
-def _spoken_span(offer: Offer, today: date) -> str:
-    start = _spoken_day(offer.valid_from, today)
+# style: (day wording, "from start until end", "only on start", "until end")
+_SPAN_WORDS = {
+    "en": (lambda day, today: f"today ({_day_en(day)})" if day == today else _day_en(day),
+           "from {start} until {end}", "only on {start}", "until {end}"),
+    "de": (lambda day, today: f"heute ({_day_de(day)})" if day == today else _day_de(day),
+           "ab {start} bis {end}", "nur am {start}", "bis {end}"),
+    "spoken": (_spoken_day, "ab {start} bis {end}", "nur am {start}", "bis {end}"),
+}
+
+
+def validity_span(offer: Offer, today: date, style: str) -> str:
+    """The validity span in every output ("en" text, "de" JSON label, "spoken" German):
+    an offer starting after today gives start and end, or only its day when it runs
+    for one day; an offer that already runs gives its end.
+    E.g. "from Mon 26 Oct until Sat 31 Oct", "nur am Fr 23.10.", "bis heute"."""
+    day, span, single, until = _SPAN_WORDS[style]
+    if offer.valid_from <= today:
+        return until.format(end=day(offer.valid_to, today))
+    start = day(offer.valid_from, today)
     if offer.valid_from == offer.valid_to:
-        return f"nur {start}" if start in ("heute", "morgen") else f"nur am {start}"
-    return f"ab {start} bis {_spoken_day(offer.valid_to, today)}"
+        # "nur morgen": "am Morgen" would mean "in the morning".
+        return f"nur {start}" if start == "morgen" else single.format(start=start)
+    return span.format(start=start, end=day(offer.valid_to, today))
 
 
 def _subject(query: str) -> str:
@@ -267,7 +268,7 @@ def _group_line_en(group: OfferGroup, today: date) -> str:
     one_size = len(sizes) == 1
     name = " ".join(p for p in (group.name, group.offers[0].pack_size if one_size else None) if p)
     clusters = _clusters(group, today)
-    labels = [validity_label_en(cluster[0], today) for cluster in clusters]
+    labels = [validity_span(cluster[0], today, "en") for cluster in clusters]
     shared = len(clusters) > 1 and len(set(labels)) == 1
     parts = []
     for cluster, label in zip(clusters, labels):
@@ -354,21 +355,24 @@ def format_speech(result: FindResult, now: datetime) -> str:
     sentences = []
     current = [_spoken_group(g, today) for g in result.current[:SPEECH_CURRENT]]
     if current:
-        ends = {offer.valid_to for _, offer in current}
-        if len(ends) == 1:
-            end = _spoken_day(ends.pop(), today)
+        spans = [validity_span(offer, today, "spoken") for _, offer in current]
+        if len(set(spans)) == 1:
             phrases = [text for text, _ in current]
-            suffix = f", alle bis {end}" if len(phrases) > 1 else f" bis {end}"
+            suffix = f", alle {spans[0]}" if len(phrases) > 1 else f" {spans[0]}"
             sentences.append(f"{subject} im Angebot: {', '.join(phrases)}{suffix}.")
         else:
-            phrases = [f"{text} bis {_spoken_day(offer.valid_to, today)}" for text, offer in current]
+            phrases = [f"{text} {span}" for (text, _), span in zip(current, spans)]
             sentences.append(f"{subject} im Angebot: {', '.join(phrases)}.")
     upcoming = [_spoken_group(g, today) for g in result.upcoming[:SPEECH_UPCOMING]]
     if upcoming:
-        phrases = [f"{_spoken_span(offer, today)} {text}" for text, offer in upcoming]
+        phrases = [f"{validity_span(offer, today, 'spoken')} {text}" for text, offer in upcoming]
         sentences.append(f"Demnächst: {', '.join(phrases)}.")
     if not sentences:
-        sentences.append(f"Für {subject} habe ich gerade keine Angebote gefunden.")
+        if result.fetched_at is None and result.error:
+            # Marktguru failed or the budget is spent, and nothing is stored for the query.
+            sentences.append(f"Ich kann gerade nicht nach Angeboten für {subject} suchen.")
+        else:
+            sentences.append(f"Für {subject} habe ich gerade keine Angebote gefunden.")
     if result.source == "store" and result.fetched_at is not None:
         sentences.append(f"Stand: {_age_de(result.fetched_at, now)}.")
     return " ".join(sentences)

@@ -111,11 +111,23 @@ def test_validity_labels():
     ends_today = offer_window(date(2026, 10, 19), SATURDAY)
     later = offer_window(date(2026, 10, 19), date(2026, 10, 31))
     starts_monday = offer_window(date(2026, 10, 26), date(2026, 10, 31))
-    assert query.validity_label_de(ends_today, SATURDAY) == "bis heute (Sa 24.10.)"
-    assert query.validity_label_de(later, SATURDAY) == "bis Sa 31.10."
-    assert query.validity_label_de(starts_monday, SATURDAY) == "ab Mo 26.10. bis Sa 31.10."
-    assert query.validity_label_en(ends_today, SATURDAY) == "until today (Sat 24 Oct)"
-    assert query.validity_label_en(starts_monday, SATURDAY) == "from Mon 26 Oct until Sat 31 Oct"
+    assert query.validity_span(ends_today, SATURDAY, "de") == "bis heute (Sa 24.10.)"
+    assert query.validity_span(later, SATURDAY, "de") == "bis Sa 31.10."
+    assert query.validity_span(starts_monday, SATURDAY, "de") == "ab Mo 26.10. bis Sa 31.10."
+    assert query.validity_span(ends_today, SATURDAY, "en") == "until today (Sat 24 Oct)"
+    assert query.validity_span(starts_monday, SATURDAY, "en") == "from Mon 26 Oct until Sat 31 Oct"
+
+
+def test_one_day_upcoming_offer_names_its_day_once_in_every_output(conn, fake_marktguru):
+    thursday, friday = date(2026, 10, 22), date(2026, 10, 23)
+    fake_marktguru.results["Butter"] = [
+        butter(1, "Almhof", "Butter", "Markt A", 0.99, 3.96, valid_from=friday, valid_to=friday),
+    ]
+    client = marktguru.Client(conn, "00000", session=fake_marktguru, clock=Clock(at(thursday)))
+    result = query.find_offers(client, "Butter")
+
+    assert "- Almhof Butter 250 g: 0.99 € (3.96 €/kg) at Markt A, only on Fri 23 Oct" in query.format_text(result, at(thursday))
+    assert result.to_dict()["upcoming"][0]["offers"][0]["validity"] == "nur am Fr 23.10."
 
 
 # --- find_offers ---
@@ -180,6 +192,10 @@ def test_sunday_answers_for_monday(conn, fake_marktguru):
         "Butter on offer on Mon 26 Oct (shops are closed today):",
         "- Weidegold Beste Butter 250 g: 1.49 € (5.96 €/kg) at Markt F, from Mon 26 Oct until Sat 31 Oct",
     ]
+    # Monday has not started yet on a Sunday, so speech says start and end too ("morgen" is Monday).
+    assert query.format_speech(result, at(SUNDAY)) == (
+        "Butter im Angebot: Weidegold Beste Butter 1,49 € bei Markt F ab morgen bis Samstag."
+    )
 
 
 def test_upcoming_lists_everything_later(saturday):
@@ -239,7 +255,18 @@ def test_failed_search_never_answers_from_other_queries(saturday, fake_marktguru
     assert result.source == "store"
     assert result.fetched_at is None
     assert result.current == [] and result.upcoming == []
-    assert query.format_speech(result, saturday.clock()) == "Für Almhof habe ich gerade keine Angebote gefunden."
+    # The lookup could not be made, so speech must not claim there are no offers.
+    assert query.format_speech(result, saturday.clock()) == "Ich kann gerade nicht nach Angeboten für Almhof suchen."
+
+
+def test_spent_budget_without_stored_fetch_says_the_search_cannot_be_made(conn, fake_marktguru):
+    client = marktguru.Client(conn, "00000", session=fake_marktguru, clock=Clock(at(SATURDAY)), daily_budget=0)
+
+    result = query.find_offers(client, "Almhof")
+
+    assert fake_marktguru.searches == []
+    assert result.fetched_at is None
+    assert query.format_speech(result, at(SATURDAY)) == "Ich kann gerade nicht nach Angeboten für Almhof suchen."
 
 
 def test_nothing_found(conn, fake_marktguru):
