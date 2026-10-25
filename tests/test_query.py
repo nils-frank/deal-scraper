@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
@@ -230,7 +231,7 @@ def test_failed_search_answers_from_the_stored_fetch_of_that_query(saturday, fak
     query.find_offers(saturday, "Butter")
     fetched = saturday.clock()
     saturday.clock.advance(hours=13)
-    fake_marktguru.fail = requests.ConnectionError("down")
+    fake_marktguru.search_status = 503
 
     result = query.find_offers(saturday, "Butter")
 
@@ -239,11 +240,50 @@ def test_failed_search_answers_from_the_stored_fetch_of_that_query(saturday, fak
     assert [g.name for g in result.current][:1] == ["Almhof Butter"]
     text = query.format_text(result, saturday.clock())
     assert text.endswith(
-        "Marktguru not asked (Marktguru error: down); stored offers fetched 13 hours ago.\n"
+        "Marktguru unavailable (HTTP 503); stored offers fetched 13 hours ago.\n"
         # The failed search counts too.
         "28 of 30 live searches left today."
     )
-    assert query.format_speech(result, saturday.clock()).endswith("Stand: vor 13 Stunden.")
+    speech = query.format_speech(result, saturday.clock())
+    assert speech.endswith("Stand: vor 13 Stunden.")
+    assert result.to_dict()["error"] == "Marktguru unavailable (HTTP 503)"
+    # The request URL and postal code never reach the answer.
+    for output in (text, speech, json.dumps(result.to_dict())):
+        assert "00000" not in output and "offers/search" not in output
+
+
+@pytest.mark.parametrize(
+    ("fail", "reason"),
+    [
+        (requests.ConnectionError("Max retries exceeded with url: /api/v1/offers/search?zipCode=00000"), "connection failed"),
+        (requests.Timeout("Read timed out. (url: /api/v1/offers/search?zipCode=00000)"), "timeout"),
+    ],
+)
+def test_failed_search_without_stored_fetch_names_only_the_reason(saturday, fake_marktguru, fail, reason):
+    fake_marktguru.fail = fail
+
+    result = query.find_offers(saturday, "Butter")
+
+    text = query.format_text(result, saturday.clock())
+    assert f"No offers stored for this query: Marktguru unavailable ({reason}).\n" in text
+    assert result.to_dict()["error"] == f"Marktguru unavailable ({reason})"
+    assert "00000" not in text and "00000" not in json.dumps(result.to_dict())
+
+
+def test_spent_budget_with_stored_fetch_says_marktguru_was_not_asked(conn, fake_marktguru):
+    fake_marktguru.results["Butter"] = BUTTER_RESULTS
+    clock = Clock(at(SATURDAY))
+    client = marktguru.Client(conn, "00000", session=fake_marktguru, clock=clock, daily_budget=1)
+    query.find_offers(client, "Butter")
+    clock.advance(hours=13)
+
+    result = query.find_offers(client, "Butter")
+
+    assert fake_marktguru.searches == ["Butter"]
+    assert query.format_text(result, clock()).endswith(
+        "Marktguru not asked (daily search budget used up); stored offers fetched 13 hours ago.\n"
+        "0 of 1 live searches left today."
+    )
 
 
 def test_failed_search_never_answers_from_other_queries(saturday, fake_marktguru):

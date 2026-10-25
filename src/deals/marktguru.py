@@ -92,6 +92,20 @@ class SearchResult:
         return self.source != "live"
 
 
+def _failure_reason(exc: Exception) -> str:
+    """A short reason for user-facing answers. requests puts the full request URL,
+    postal code included, into its messages, so those never get through."""
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        return f"HTTP {exc.response.status_code}"
+    if isinstance(exc, requests.Timeout):
+        return "timeout"
+    if isinstance(exc, requests.ConnectionError):
+        return "connection failed"
+    if isinstance(exc, MarktguruError):
+        return str(exc)
+    return "unexpected response"
+
+
 def normalize_query(query: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", query).casefold().split())
 
@@ -223,7 +237,7 @@ class Client:
             return self._from_store(query, query_norm, BUDGET_USED_UP)
         except (MarktguruError, requests.RequestException, ValueError) as exc:
             log.warning("Marktguru search failed for %r: %s", query, exc)
-            return self._from_store(query, query_norm, f"Marktguru error: {exc}")
+            return self._from_store(query, query_norm, f"Marktguru unavailable ({_failure_reason(exc)})")
         return SearchResult(query, offers, now, "live", self.budget_left())
 
     def search_narrowing(self, query: str) -> SearchResult:

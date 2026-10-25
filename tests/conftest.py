@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from urllib.parse import urlencode
 from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
@@ -88,10 +89,11 @@ def raw_offer(
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, text: str):
+    def __init__(self, status_code: int, text: str, url: str = ""):
         self.status_code = status_code
         self.text = text
         self.content = text.encode()
+        self.url = url
 
     def json(self):
         return json.loads(self.text)
@@ -100,7 +102,8 @@ class FakeResponse:
         if self.status_code >= 400:
             import requests
 
-            raise requests.HTTPError(f"HTTP {self.status_code}")
+            # Like requests: the message carries the full URL, query string included.
+            raise requests.HTTPError(f"{self.status_code} Server Error: for url: {self.url}", response=self)
 
 
 class FakeMarktguru:
@@ -112,6 +115,7 @@ class FakeMarktguru:
         self.calls: list[tuple[str, dict | None]] = []
         self.fail: Exception | None = None
         self.reject_keys = 0  # answer this many searches with HTTP 401
+        self.search_status = 200  # answer searches with this HTTP status
 
     @property
     def searches(self) -> list[str]:
@@ -130,6 +134,8 @@ class FakeMarktguru:
         if self.reject_keys:
             self.reject_keys -= 1
             return FakeResponse(401, "")
+        if self.search_status != 200:
+            return FakeResponse(self.search_status, "", f"{url}?{urlencode(params)}")
         # Marktguru's search ignores case.
         results = next((r for q, r in self.results.items() if q.casefold() == params["q"].casefold()), [])
         return FakeResponse(200, json.dumps({"totalResults": len(results), "results": results}))

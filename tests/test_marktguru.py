@@ -165,7 +165,7 @@ def test_no_narrowing_after_a_marktguru_error(client, conn, fake_marktguru):
     assert fake_marktguru.searches == ["Butter", "Testmarke Natur"]
     assert conn.execute("SELECT COUNT(*) FROM fetches").fetchone()[0] == 2
     assert result.query == "Testmarke Natur"
-    assert result.error.startswith("Marktguru error")
+    assert result.error == "Marktguru unavailable (connection failed)"
 
 
 def test_narrowing_with_budget_spent_answers_from_the_narrowed_store(conn, fake_marktguru, clock):
@@ -286,7 +286,7 @@ def test_marktguru_error_answers_from_store(client, fake_marktguru, clock):
     result = client.search("Butter")
 
     assert result.source == "store"
-    assert result.error.startswith("Marktguru error")
+    assert result.error == "Marktguru unavailable (connection failed)"
     assert [o.offer_id for o in result.offers] == ["marktguru:1"]
     assert result.fetched_at == fetched
 

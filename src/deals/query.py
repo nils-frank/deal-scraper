@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from deals.marktguru import DAILY_BUDGET, Client
+from deals.marktguru import BUDGET_USED_UP, DAILY_BUDGET, Client
 from deals.match import MatchDecision, MatchMethod, classify_all
 from deals.schema import Offer, local_date
 
@@ -328,9 +328,11 @@ def format_text(result: FindResult, now: datetime) -> str:
         others = ", ".join(f"{name} ({count})" for name, count in result.excluded_categories.items())
         lines.append(f"Left out as other categories: {others}.")
     if result.fetched_at is None:
-        lines.append(f"No offers stored for this query ({result.error}).")
-    elif result.source == "store":
+        lines.append(f"No offers stored for this query: {result.error}.")
+    elif result.error == BUDGET_USED_UP:
         lines.append(f"Marktguru not asked ({result.error}); stored offers fetched {_age_en(result.fetched_at, now)}.")
+    elif result.source == "store":
+        lines.append(f"{result.error}; stored offers fetched {_age_en(result.fetched_at, now)}.")
     else:
         cached = " (cached)" if result.source == "cache" else ""
         lines.append(f"Prices from Marktguru, fetched {_age_en(result.fetched_at, now)}{cached}.")
