@@ -182,6 +182,18 @@ def test_narrowing_with_budget_spent_answers_from_the_narrowed_store(conn, fake_
     assert [o.offer_id for o in result.offers] == ["marktguru:1"]
 
 
+def test_empty_narrowed_search_keeps_the_original_answer(conn, fake_marktguru, clock):
+    client = marktguru.Client(conn, "00000", session=fake_marktguru, clock=clock, daily_budget=1)
+
+    result = client.search_narrowing("Testmarke Natur")
+
+    assert fake_marktguru.searches == ["Testmarke Natur"]
+    assert result.query == "Testmarke Natur"
+    assert result.source == "live"
+    assert result.fetched_at == clock.now
+    assert result.error is None
+
+
 # --- client: keys ---
 
 

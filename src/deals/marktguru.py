@@ -239,7 +239,8 @@ class Client:
         if result.offers or len(words) < 2 or not answered:
             return result
         log.info("No offers for %r, retrying with narrowed query %r", query, words[0])
-        return self.search(words[0])
+        narrowed = self.search(words[0])
+        return narrowed if narrowed.offers else result
 
     def _live_search(self, query: str, query_norm: str) -> list[Offer]:
         for attempt in range(2):
