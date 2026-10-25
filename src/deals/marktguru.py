@@ -23,7 +23,7 @@ import json
 import logging
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Optional
 
@@ -240,7 +240,7 @@ class Client:
             return result
         log.info("No offers for %r, retrying with narrowed query %r", query, words[0])
         narrowed = self.search(words[0])
-        return narrowed if narrowed.offers else result
+        return narrowed if narrowed.offers else replace(result, budget_left=narrowed.budget_left)
 
     def _live_search(self, query: str, query_norm: str) -> list[Offer]:
         for attempt in range(2):

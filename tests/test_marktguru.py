@@ -182,16 +182,21 @@ def test_narrowing_with_budget_spent_answers_from_the_narrowed_store(conn, fake_
     assert [o.offer_id for o in result.offers] == ["marktguru:1"]
 
 
-def test_empty_narrowed_search_keeps_the_original_answer(conn, fake_marktguru, clock):
-    client = marktguru.Client(conn, "00000", session=fake_marktguru, clock=clock, daily_budget=1)
+@pytest.mark.parametrize(
+    ("daily_budget", "searches"),
+    [(1, ["Testmarke Natur"]), (2, ["Testmarke Natur", "Testmarke"])],
+)
+def test_empty_narrowed_search_keeps_the_original_answer(conn, fake_marktguru, clock, daily_budget, searches):
+    client = marktguru.Client(conn, "00000", session=fake_marktguru, clock=clock, daily_budget=daily_budget)
 
     result = client.search_narrowing("Testmarke Natur")
 
-    assert fake_marktguru.searches == ["Testmarke Natur"]
+    assert fake_marktguru.searches == searches
     assert result.query == "Testmarke Natur"
     assert result.source == "live"
     assert result.fetched_at == clock.now
     assert result.error is None
+    assert result.budget_left == 0
 
 
 # --- client: keys ---
