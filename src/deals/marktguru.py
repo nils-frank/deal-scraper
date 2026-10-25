@@ -85,7 +85,7 @@ class SearchResult:
     fetched_at: Optional[datetime]  # when Marktguru returned these offers; None if never
     source: str                    # "live", "cache" (younger than QUERY_TTL) or "store" (fallback)
     budget_left: int
-    error: Optional[str] = None    # why no live search was made, for source "store"
+    error: Optional[str] = None    # why no live search answered, for source "store"
 
     @property
     def from_cache(self) -> bool:
@@ -246,7 +246,8 @@ class Client:
         Nature", "Alpro Not M*lk") that aren't in the offer's title can return 0
         results even though the item is on offer under a shorter name. Retries once
         with just the first word (typically the brand) and leaves precision to the
-        matcher."""
+        matcher. Never retries after a Marktguru error, so an outage costs one
+        search, and keeps the original answer when the retry finds nothing too."""
         result = self.search(query)
         words = query.split()
         answered = result.source != "store" or result.error == BUDGET_USED_UP
