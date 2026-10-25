@@ -156,6 +156,32 @@ def test_narrowing_retries_with_first_word(client, fake_marktguru):
     assert len(fake_marktguru.searches) == 2
 
 
+def test_no_narrowing_after_a_marktguru_error(client, conn, fake_marktguru):
+    client.search("Butter")
+    fake_marktguru.fail = requests.ConnectionError("down")
+
+    result = client.search_narrowing("Testmarke Natur")
+
+    assert fake_marktguru.searches == ["Butter", "Testmarke Natur"]
+    assert conn.execute("SELECT COUNT(*) FROM fetches").fetchone()[0] == 2
+    assert result.query == "Testmarke Natur"
+    assert result.error.startswith("Marktguru error")
+
+
+def test_narrowing_with_budget_spent_answers_from_the_narrowed_store(conn, fake_marktguru, clock):
+    client = marktguru.Client(conn, "00000", session=fake_marktguru, clock=clock, daily_budget=1)
+    fake_marktguru.results["Testmarke"] = [raw_offer(1, brand="Testmarke")]
+    client.search("Testmarke")
+    clock.advance(hours=13)
+
+    result = client.search_narrowing("Testmarke Natur")
+
+    assert fake_marktguru.searches == ["Testmarke"]
+    assert result.query == "Testmarke"
+    assert result.source == "store"
+    assert [o.offer_id for o in result.offers] == ["marktguru:1"]
+
+
 # --- client: keys ---
 
 
