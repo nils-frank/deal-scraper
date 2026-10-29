@@ -156,6 +156,16 @@ def test_narrowing_retries_with_first_word(client, fake_marktguru):
     assert len(fake_marktguru.searches) == 2
 
 
+def test_no_narrowing_to_a_short_first_word(client, fake_marktguru):
+    fake_marktguru.results["De"] = [raw_offer(1, brand="Dextro")]
+
+    result = client.search_narrowing("De Testmarke")
+
+    assert fake_marktguru.searches == ["De Testmarke"]
+    assert result.query == "De Testmarke"
+    assert result.offers == []
+
+
 def test_no_narrowing_after_a_marktguru_error(client, conn, fake_marktguru):
     client.search("Butter")
     fake_marktguru.fail = requests.ConnectionError("down")
