@@ -186,7 +186,7 @@ class DealService:
             run = store.last_watchlist_run(conn)
             client = self._client(conn)
             left = client.budget_left()
-            last_search_at, last_ok, last_success_at = store.last_fetches(conn)
+            last_search_at, last_ok, last_success_at = store.last_fetches(conn, now - marktguru.SEARCH_DEADLINE)
         if last_ok is None:
             health = "unknown"
         else:
@@ -266,8 +266,11 @@ class DealService:
         text = query.format_shopping_item(offer, today)
         entity = self.settings.shopping_list_entity
         offer_dict = {**offer.to_dict(), "validity": query.validity_span(offer, today, "de")}
-        if _find_item(self._ha(ha.get_todo_items, entity), text):
-            return {"added": False, "item": text, "list": entity, "reason": "already on the shopping list", "offer": offer_dict}
+        wanted = _normalized(query.shopping_item_offer(text))
+        items = self._ha(ha.get_todo_items, entity)
+        existing = next((i for i in items if _normalized(query.shopping_item_offer(i["summary"])) == wanted), None)
+        if existing:
+            return {"added": False, "item": existing["summary"], "list": entity, "reason": "already on the shopping list", "offer": offer_dict}
         self._ha(ha.add_todo_item, entity, text)
         return {"added": True, "item": text, "list": entity, "offer": offer_dict}
 

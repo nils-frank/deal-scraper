@@ -11,6 +11,7 @@ question never changes what the watchlist run pushes.
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -219,14 +220,10 @@ def validity_span(offer: Offer, today: date, style: str) -> str:
 
 
 def short_validity(offer: Offer, today: date) -> str:
-    """The shortest span that still reads right on a shopping list: "bis Sa",
-    "ab Mo", "bis heute". A day more than six days away keeps its date, since a
-    bare weekday would name the nearer one."""
+    """The shortest span that still reads right on a shopping list days later:
+    "bis Sa", "ab Mo", never "heute" or "morgen". A day more than six days away
+    keeps its date, since a bare weekday would name the nearer one."""
     def day(value: date) -> str:
-        if value == today:
-            return "heute"
-        if value == today + timedelta(days=1):
-            return "morgen"
         if value < today + timedelta(days=7):
             return WEEKDAYS_DE[value.weekday()]
         return _day_de(value)
@@ -412,3 +409,12 @@ def format_shopping_item(offer: Offer, today: date) -> str:
     price = f" {_euro_de(offer.price)}" if offer.price is not None else ""
     details = [offer.retailer, short_validity(offer, today)] + (["App-Preis"] if offer.app_only else [])
     return f"{offer.name}{price} ({', '.join(details)})"
+
+
+_SHOPPING_SPAN = re.compile(r", (?:bis|ab) [^,()]+(?=(?:, App-Preis)?\)$)")
+
+
+def shopping_item_offer(entry: str) -> str:
+    """A shopping list entry without its validity span: what stays the same when
+    the same offer is put on the list again on a later day."""
+    return _SHOPPING_SPAN.sub("", entry.strip())

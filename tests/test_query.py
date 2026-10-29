@@ -120,12 +120,12 @@ def test_validity_labels():
 
 
 @pytest.mark.parametrize(("valid_from", "valid_to", "label"), [
-    (date(2026, 10, 19), THURSDAY, "bis heute"),
-    (date(2026, 10, 19), date(2026, 10, 23), "bis morgen"),
+    (date(2026, 10, 19), THURSDAY, "bis Do"),
+    (date(2026, 10, 19), date(2026, 10, 23), "bis Fr"),
     (date(2026, 10, 19), SATURDAY, "bis Sa"),
     (date(2026, 10, 19), date(2026, 10, 28), "bis Mi"),
     (date(2026, 10, 19), date(2026, 10, 29), "bis Do 29.10."),  # a bare "Do" would read as today
-    (date(2026, 10, 23), SATURDAY, "ab morgen"),
+    (date(2026, 10, 23), SATURDAY, "ab Fr"),
     (date(2026, 10, 26), date(2026, 10, 31), "ab Mo"),
 ])
 def test_short_validity(valid_from, valid_to, label):
@@ -138,6 +138,18 @@ def test_shopping_item():
     app = make_offer(title="Butter", retailer="Markt A", price=None, app_only=True,
                      valid_from=date(2026, 10, 26), valid_to=date(2026, 10, 31))
     assert query.format_shopping_item(app, THURSDAY) == "Butter (Markt A, ab Mo, App-Preis)"
+
+
+def test_shopping_item_offer_stays_the_same_on_later_days():
+    offer = make_offer(title="Feine Butter", brand="Bergwiese", retailer="Markt C", price=1.29, app_only=True,
+                       valid_from=date(2026, 10, 23), valid_to=date(2026, 10, 31))
+    entries = [query.format_shopping_item(offer, day) for day in (THURSDAY, date(2026, 10, 23), date(2026, 10, 30))]
+    assert entries == [
+        "Bergwiese Feine Butter 1,29 € (Markt C, ab Fr, App-Preis)",
+        "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 31.10., App-Preis)",
+        "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa, App-Preis)",
+    ]
+    assert {query.shopping_item_offer(entry) for entry in entries} == {"Bergwiese Feine Butter 1,29 € (Markt C, App-Preis)"}
 
 
 def test_one_day_upcoming_offer_names_its_day_once_in_every_output(conn, fake_marktguru):

@@ -368,10 +368,15 @@ def get_offer(conn: sqlite3.Connection, offer_key: str) -> Offer | None:
     return _row_to_offer(row) if row else None
 
 
-def last_fetches(conn: sqlite3.Connection) -> tuple[datetime | None, bool | None, datetime | None]:
-    """(time of the newest live search, whether it succeeded, time of the newest
-    successful one), for the service's Marktguru health."""
-    last = conn.execute("SELECT fetched_at, ok FROM fetches ORDER BY fetched_at DESC, id DESC LIMIT 1").fetchone()
+def last_fetches(conn: sqlite3.Connection, unfinished_since: datetime) -> tuple[datetime | None, bool | None, datetime | None]:
+    """(time of the newest finished live search, whether it succeeded, time of the
+    newest successful one), for the service's Marktguru health. A search that has
+    not succeeded and started after `unfinished_since` may still be running, so
+    it does not count yet."""
+    last = conn.execute(
+        "SELECT fetched_at, ok FROM fetches WHERE ok = 1 OR fetched_at <= ? ORDER BY fetched_at DESC, id DESC LIMIT 1",
+        (to_iso(unfinished_since),),
+    ).fetchone()
     ok = conn.execute("SELECT MAX(fetched_at) FROM fetches WHERE ok = 1").fetchone()[0]
     return (
         datetime.fromisoformat(last[0]) if last else None,

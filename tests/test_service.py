@@ -294,9 +294,27 @@ def test_status_reports_budget_and_marktguru_health(server, deals, fake_marktgur
     fake_marktguru.search_status = 503
     deals.clock.advance(minutes=5)
     get(server, "/api/find", q="Quark")
+    deals.clock.advance(seconds=marktguru.SEARCH_DEADLINE.total_seconds())
     status = get(server, "/api/status").json()
     assert status["budget"]["used_today"] == 2
     assert status["marktguru"] == {
+        "health": "failing",
+        "last_search_at": (NOW + timedelta(minutes=5)).isoformat(),
+        "last_success_at": NOW.isoformat(),
+    }
+
+
+def test_status_does_not_count_a_search_still_running(deals, fake_marktguru):
+    deals.find_offers("Butter")
+    deals.clock.advance(minutes=5)
+    with store.open_store(deals.settings.db_path) as conn:
+        store.reserve_search(conn, "quark", "00000", deals.clock(), NOW, marktguru.DAILY_BUDGET)
+    running = deals.status()
+    assert running["budget"]["used_today"] == 2
+    assert running["marktguru"] == {"health": "ok", "last_search_at": NOW.isoformat(), "last_success_at": NOW.isoformat()}
+
+    deals.clock.advance(seconds=marktguru.SEARCH_DEADLINE.total_seconds())
+    assert deals.status()["marktguru"] == {
         "health": "failing",
         "last_search_at": (NOW + timedelta(minutes=5)).isoformat(),
         "last_success_at": NOW.isoformat(),
@@ -414,6 +432,18 @@ def test_add_to_shopping_list(server, deals, fake_ha):
     assert fake_ha.summaries(SHOPPING) == [
         "Milch", "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa, App-Preis)", "Weidegold Beste Butter 1,49 € (Markt F, ab Mo)",
     ]
+
+
+def test_add_to_shopping_list_again_on_a_later_day(server, deals, fake_ha):
+    get(server, "/api/find", q="Butter")
+    first = deals.add_to_shopping_list("marktguru:3")
+    deals.clock.advance(days=4)
+    again = deals.add_to_shopping_list("marktguru:3")
+    assert first["item"] == "Weidegold Beste Butter 1,49 € (Markt F, ab Mo)"
+    assert again["added"] is False
+    assert again["offer"]["validity"] == "bis Sa 31.10."
+    assert again["item"] == first["item"]
+    assert fake_ha.summaries(SHOPPING) == ["Milch", first["item"]]
 
 
 def test_write_tools_report_home_assistant_failures(deals, fake_ha):

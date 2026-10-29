@@ -41,6 +41,8 @@ IMAGE_URL_TEMPLATE = "https://cdn.marktguru.de/api/v1/offers/{offer_id}/images/d
 SEARCH_ENDPOINT = "https://api.marktguru.de/api/v1/offers/search"
 USER_AGENT = "deal-scraper/1.0 (+homelab)"
 REQUEST_TIMEOUT = 15
+# A live search makes at most four requests: keys and search, and both again after stale keys.
+SEARCH_DEADLINE = timedelta(seconds=4 * REQUEST_TIMEOUT)
 SEARCH_LIMIT = 40
 
 KEY_TTL = timedelta(hours=6)
