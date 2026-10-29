@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deals"
+version = "2.0.0"
+description = "Grocery flyer offers from Marktguru for one household's Home Assistant"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "requests==2.32.3",
+    "rapidfuzz==3.10.1",
+    # zoneinfo data for Europe/Berlin; slim images may ship without system tzdata.
+    "tzdata==2025.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+deals = "deals.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

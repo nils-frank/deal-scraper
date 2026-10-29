@@ -12,25 +12,31 @@ import requests
 
 log = logging.getLogger(__name__)
 
-HA_URL = os.environ.get("HA_URL", "http://localhost:8123")
-HA_TOKEN = os.environ["HA_TOKEN"]
 REQUEST_TIMEOUT = 15
 
-_HEADERS = {
-    "Authorization": f"Bearer {HA_TOKEN}",
-    "Content-Type": "application/json",
-}
+
+def _url() -> str:
+    return os.environ.get("HA_URL", "http://localhost:8123")
+
+
+def _headers() -> dict:
+    # Read per call, so commands that never talk to Home Assistant (`deals find`)
+    # need no HA_TOKEN.
+    return {
+        "Authorization": f"Bearer {os.environ['HA_TOKEN']}",
+        "Content-Type": "application/json",
+    }
 
 
 def get_todo_items(entity_id: str) -> list[dict]:
     """Returns {"uid", "summary", "description"} for every needs_action item on the
     given todo list, via todo.get_items with return_response=true. uid is needed to
     target todo.update_item later without relying on summary text matching."""
-    log.info("POST %s/api/services/todo/get_items entity_id=%s", HA_URL, entity_id)
+    log.info("POST %s/api/services/todo/get_items entity_id=%s", _url(), entity_id)
     resp = requests.post(
-        f"{HA_URL}/api/services/todo/get_items",
+        f"{_url()}/api/services/todo/get_items",
         params={"return_response": "true"},
-        headers=_HEADERS,
+        headers=_headers(),
         json={"entity_id": entity_id},
         timeout=REQUEST_TIMEOUT,
     )
@@ -57,10 +63,10 @@ def update_todo_item_description(entity_id: str, uid: str, description: str | No
     """POST todo/update_item - sets the item's description field (visible when the
     todo list item is expanded in the app), without touching its summary or status.
     A description of None clears the field."""
-    log.info("POST %s/api/services/todo/update_item uid=%s description=%r", HA_URL, uid, description)
+    log.info("POST %s/api/services/todo/update_item uid=%s description=%r", _url(), uid, description)
     resp = requests.post(
-        f"{HA_URL}/api/services/todo/update_item",
-        headers=_HEADERS,
+        f"{_url()}/api/services/todo/update_item",
+        headers=_headers(),
         json={"entity_id": entity_id, "item": uid, "description": description},
         timeout=REQUEST_TIMEOUT,
     )
@@ -75,10 +81,10 @@ def add_todo_item(entity_id: str, summary: str, description: str | None = None) 
     payload = {"entity_id": entity_id, "item": summary}
     if description:
         payload["description"] = description
-    log.info("POST %s/api/services/todo/add_item payload=%s", HA_URL, payload)
+    log.info("POST %s/api/services/todo/add_item payload=%s", _url(), payload)
     resp = requests.post(
-        f"{HA_URL}/api/services/todo/add_item",
-        headers=_HEADERS,
+        f"{_url()}/api/services/todo/add_item",
+        headers=_headers(),
         json=payload,
         timeout=REQUEST_TIMEOUT,
     )
@@ -89,10 +95,10 @@ def add_todo_item(entity_id: str, summary: str, description: str | None = None) 
 def remove_todo_item(entity_id: str, summary: str) -> None:
     """POST todo/remove_item - removes an item from a to-do list by its summary
     text (the local_todo integration resolves summary to uid internally)."""
-    log.info("POST %s/api/services/todo/remove_item entity_id=%s item=%r", HA_URL, entity_id, summary)
+    log.info("POST %s/api/services/todo/remove_item entity_id=%s item=%r", _url(), entity_id, summary)
     resp = requests.post(
-        f"{HA_URL}/api/services/todo/remove_item",
-        headers=_HEADERS,
+        f"{_url()}/api/services/todo/remove_item",
+        headers=_headers(),
         json={"entity_id": entity_id, "item": summary},
         timeout=REQUEST_TIMEOUT,
     )
@@ -107,10 +113,10 @@ def notify(service: str, message: str, title: str | None = None, data: dict | No
         payload["title"] = title
     if data:
         payload["data"] = data
-    log.info("POST %s/api/services/notify/%s payload=%s", HA_URL, service, payload)
+    log.info("POST %s/api/services/notify/%s payload=%s", _url(), service, payload)
     resp = requests.post(
-        f"{HA_URL}/api/services/notify/{service}",
-        headers=_HEADERS,
+        f"{_url()}/api/services/notify/{service}",
+        headers=_headers(),
         json=payload,
         timeout=REQUEST_TIMEOUT,
     )
