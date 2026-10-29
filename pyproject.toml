@@ -13,6 +13,11 @@ dependencies = [
     "rapidfuzz==3.10.1",
     # zoneinfo data for Europe/Berlin; slim images may ship without system tzdata.
     "tzdata==2025.2",
+    # The deal service (`deals serve`): the official MCP SDK, and the ASGI
+    # framework and server it is built on, which also serve the JSON API.
+    "mcp==2.3.0",
+    "starlette==1.10.0",
+    "uvicorn==0.54.0",
 ]
 
 [project.optional-dependencies]

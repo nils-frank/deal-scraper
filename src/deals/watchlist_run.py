@@ -103,6 +103,8 @@ def run() -> int:
     watchlist = ha.get_todo_items(TODO_ENTITY_ID)
     if not watchlist:
         log.info("Watchlist %s is empty, nothing to do.", TODO_ENTITY_ID)
+        with store.open_store(db_path) as conn:
+            store.record_watchlist_run(conn, utcnow(), [], 0)
         return 0
     log.info("Watchlist (%d items): %s", len(watchlist), [i["summary"] for i in watchlist])
 
@@ -189,6 +191,7 @@ def run() -> int:
                 log.info("  NEW MATCH (score=%.0f): %s bei %s", score, offer.title, offer.retailer)
 
         sync_watchlist_descriptions(conn, watchlist, today)
+        store.record_watchlist_run(conn, utcnow(), [i["summary"] for i in watchlist], len(notified_offers))
 
     if notified_offers:
         try:

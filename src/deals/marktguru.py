@@ -7,7 +7,7 @@ accepted as request headers.
 
 Marktguru's terms prohibit automated extraction, so traffic stays at "one person
 browsing" scale (DESIGN.md, "Marktguru traffic"). Every caller - the watchlist run,
-`deals find`, the later deal service - goes through `Client`, and all of them share
+`deals find`, the deal service - goes through `Client`, and all of them share
 the store:
 - the keys are cached for KEY_TTL;
 - a search younger than QUERY_TTL for the same normalized query is answered from
