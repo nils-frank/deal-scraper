@@ -11,7 +11,6 @@ question never changes what the watchlist run pushes.
 """
 from __future__ import annotations
 
-import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -219,18 +218,13 @@ def validity_span(offer: Offer, today: date, style: str) -> str:
     return span.format(start=start, end=day(offer.valid_to, today))
 
 
-def short_validity(offer: Offer, today: date) -> str:
-    """The shortest span that still reads right on a shopping list days later:
-    "bis Sa", "ab Mo", never "heute" or "morgen". A day more than six days away
-    keeps its date, since a bare weekday would name the nearer one."""
-    def day(value: date) -> str:
-        if value < today + timedelta(days=7):
-            return WEEKDAYS_DE[value.weekday()]
-        return _day_de(value)
-
+def shopping_validity(offer: Offer, today: date) -> str:
+    """The span on a shopping list entry, with weekday and date so it still reads
+    right days later: "bis Sa 31.10.", or before the offer starts
+    "ab Mo 02.11. bis Sa 07.11." and "nur am Fr 23.10."."""
     if offer.valid_from > today:
-        return f"ab {day(offer.valid_from)}"
-    return f"bis {day(offer.valid_to)}"
+        return validity_span(offer, today, "de")
+    return f"bis {_day_de(offer.valid_to)}"
 
 
 def _subject(query: str) -> str:
@@ -404,17 +398,14 @@ def format_speech(result: FindResult, now: datetime) -> str:
 
 
 def format_shopping_item(offer: Offer, today: date) -> str:
-    """A shopping list entry: "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa)",
+    """A shopping list entry: "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 24.10.)",
     with "App-Preis" when the price needs the chain's app."""
     price = f" {_euro_de(offer.price)}" if offer.price is not None else ""
-    details = [offer.retailer, short_validity(offer, today)] + (["App-Preis"] if offer.app_only else [])
+    details = [offer.retailer, shopping_validity(offer, today)] + (["App-Preis"] if offer.app_only else [])
     return f"{offer.name}{price} ({', '.join(details)})"
 
 
-_SHOPPING_SPAN = re.compile(r", (?:bis|ab) [^,()]+(?=(?:, App-Preis)?\)$)")
-
-
-def shopping_item_offer(entry: str) -> str:
-    """A shopping list entry without its validity span: what stays the same when
-    the same offer is put on the list again on a later day."""
-    return _SHOPPING_SPAN.sub("", entry.strip())
+def shopping_items(offer: Offer) -> set[str]:
+    """Every entry format_shopping_item gives this offer on any day: the one from
+    before it starts and the one once it runs."""
+    return {format_shopping_item(offer, day) for day in (offer.valid_from - timedelta(days=1), offer.valid_from)}

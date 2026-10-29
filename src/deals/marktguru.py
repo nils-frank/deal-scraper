@@ -41,8 +41,6 @@ IMAGE_URL_TEMPLATE = "https://cdn.marktguru.de/api/v1/offers/{offer_id}/images/d
 SEARCH_ENDPOINT = "https://api.marktguru.de/api/v1/offers/search"
 USER_AGENT = "deal-scraper/1.0 (+homelab)"
 REQUEST_TIMEOUT = 15
-# A live search makes at most four requests: keys and search, and both again after stale keys.
-SEARCH_DEADLINE = timedelta(seconds=4 * REQUEST_TIMEOUT)
 SEARCH_LIMIT = 40
 
 KEY_TTL = timedelta(hours=6)
@@ -270,8 +268,9 @@ class Client:
                 raise BudgetExhausted()
             try:
                 results, total = self._request(query, *self._keys(refresh=attempt > 0))
-            except StaleKeys as exc:
-                if attempt:
+            except Exception as exc:
+                store.fail_fetch(self.conn, fetch_id)
+                if attempt or not isinstance(exc, StaleKeys):
                     raise
                 log.warning("Marktguru keys rejected, refreshing once: %s", exc)
                 continue

@@ -103,7 +103,7 @@ curl -H "Authorization: Bearer $DEAL_SERVICE_TOKEN" "http://localhost:8000/api/f
 | `find_offers(query, when="now", stores=None, limit=20)` | Current and upcoming offers grouped by product, cheapest first. Per offer: store, price, unit price, old price, `app_only`, `valid_from`, `valid_to`, a validity label relative to today (`validity` "bis Sa 24.10.", `validity_en` "until Sat 24 Oct"), image URL, link and `offer_key`; plus `fetched_at`, `from_cache` and `budget_left` | At most two searches, cached 12 h |
 | `watchlist_deals(when="now")` | What the last watchlist run matched, per watchlist item | None, read from the store |
 | `watchlist_add(item)`, `watchlist_remove(item)` | Edit the watchlist to-do list (`TODO_ENTITY_ID`) | None |
-| `add_to_shopping_list(offer_key)` | Put an offer on the shopping list, e.g. "Meggle Butter 1,29 € (REWE, bis Sa)" | None |
+| `add_to_shopping_list(offer_key)` | Put an offer on the shopping list, e.g. "Meggle Butter 1,29 € (REWE, bis Sa 31.10.)" | None |
 
 `find_offers` and `watchlist_deals` carry `readOnlyHint`. The three write tools do not,
 so Claude asks before each call. The server also offers the resource `deals://status`

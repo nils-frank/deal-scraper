@@ -232,7 +232,7 @@ def test_stale_keys_are_refreshed_once_and_both_attempts_count(client, conn, fak
     assert result.source == "live"
     assert len(result.offers) == 1
     assert fake_marktguru.homepage_loads == 2
-    assert conn.execute("SELECT ok FROM fetches ORDER BY id").fetchall() == [(0,), (1,)]
+    assert conn.execute("SELECT ok FROM fetches ORDER BY id").fetchall() == [(-1,), (1,)]
     assert result.budget_left == marktguru.DAILY_BUDGET - 2
 
 
@@ -308,4 +308,4 @@ def test_unexpected_response_counts_and_falls_back(client, conn, fake_marktguru)
 
     assert result.source == "store"
     assert result.offers == []
-    assert conn.execute("SELECT ok FROM fetches").fetchall() == [(0,)]
+    assert conn.execute("SELECT ok FROM fetches").fetchall() == [(-1,)]

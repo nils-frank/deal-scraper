@@ -186,7 +186,7 @@ class DealService:
             run = store.last_watchlist_run(conn)
             client = self._client(conn)
             left = client.budget_left()
-            last_search_at, last_ok, last_success_at = store.last_fetches(conn, now - marktguru.SEARCH_DEADLINE)
+            last_search_at, last_ok, last_success_at = store.last_fetches(conn)
         if last_ok is None:
             health = "unknown"
         else:
@@ -254,7 +254,7 @@ class DealService:
         return {"removed": True, "item": existing["summary"], "list": entity}
 
     def add_to_shopping_list(self, offer_key: str) -> dict:
-        """Puts "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa)" on the shopping list,
+        """Puts "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 24.10.)" on the shopping list,
         for an offer a find_offers or watchlist_deals answer named."""
         today = local_date(self.clock())
         with self._store() as conn:
@@ -266,9 +266,9 @@ class DealService:
         text = query.format_shopping_item(offer, today)
         entity = self.settings.shopping_list_entity
         offer_dict = {**offer.to_dict(), "validity": query.validity_span(offer, today, "de")}
-        wanted = _normalized(query.shopping_item_offer(text))
+        known = {_normalized(entry) for entry in query.shopping_items(offer)}
         items = self._ha(ha.get_todo_items, entity)
-        existing = next((i for i in items if _normalized(query.shopping_item_offer(i["summary"])) == wanted), None)
+        existing = next((i for i in items if _normalized(i["summary"]) in known), None)
         if existing:
             return {"added": False, "item": existing["summary"], "list": entity, "reason": "already on the shopping list", "offer": offer_dict}
         self._ha(ha.add_todo_item, entity, text)

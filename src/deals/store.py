@@ -10,6 +10,7 @@ Tables:
 - offers: every fetched offer, upserted on each fetch (12 months, raw_json 30 days).
 - fetches + fetch_offers: one row per live Marktguru search and the offers it
   returned, in order. This is the query cache and the daily search budget (90 days).
+  A fetch's ok is 0 while the search runs, 1 once it succeeded and -1 once it failed.
 - matches: every watchlist verdict with the method that decided it (12 months).
 - notified_offers: the push dedup table, keyed on offer ID + validity window.
   Each row also keeps the display details (title, retailer, price) of the offer
@@ -319,7 +320,7 @@ def reserve_search(
     """Counts the live searches since `day_start` and, if fewer than `budget`,
     records a new one and returns its fetch id. Counting and recording happen
     under one write lock, so concurrent processes can never overrun the budget.
-    The row stays ok=0 until finish_fetch, so a failed search still counts."""
+    The row stays ok=0 until finish_fetch or fail_fetch, and a failed search still counts."""
     with transaction(conn):
         if searches_since(conn, day_start) >= budget:
             return None
@@ -353,6 +354,10 @@ def finish_fetch(conn: sqlite3.Connection, fetch_id: int, now: datetime, offers:
         conn.execute("UPDATE fetches SET ok = 1, total_results = ? WHERE id = ?", (total_results, fetch_id))
 
 
+def fail_fetch(conn: sqlite3.Connection, fetch_id: int) -> None:
+    conn.execute("UPDATE fetches SET ok = -1 WHERE id = ?", (fetch_id,))
+
+
 def latest_fetch(conn: sqlite3.Connection, query_norm: str, plz: str, since: datetime | None = None) -> Fetch | None:
     """The newest successful search for this query, optionally only one younger than `since`."""
     row = conn.execute(
@@ -368,19 +373,17 @@ def get_offer(conn: sqlite3.Connection, offer_key: str) -> Offer | None:
     return _row_to_offer(row) if row else None
 
 
-def last_fetches(conn: sqlite3.Connection, unfinished_since: datetime) -> tuple[datetime | None, bool | None, datetime | None]:
+def last_fetches(conn: sqlite3.Connection) -> tuple[datetime | None, bool | None, datetime | None]:
     """(time of the newest finished live search, whether it succeeded, time of the
-    newest successful one), for the service's Marktguru health. A search that has
-    not succeeded and started after `unfinished_since` may still be running, so
-    it does not count yet."""
+    newest successful one), for the service's Marktguru health. A search still
+    running does not count yet."""
     last = conn.execute(
-        "SELECT fetched_at, ok FROM fetches WHERE ok = 1 OR fetched_at <= ? ORDER BY fetched_at DESC, id DESC LIMIT 1",
-        (to_iso(unfinished_since),),
+        "SELECT fetched_at, ok FROM fetches WHERE ok != 0 ORDER BY fetched_at DESC, id DESC LIMIT 1"
     ).fetchone()
     ok = conn.execute("SELECT MAX(fetched_at) FROM fetches WHERE ok = 1").fetchone()[0]
     return (
         datetime.fromisoformat(last[0]) if last else None,
-        bool(last[1]) if last else None,
+        last[1] == 1 if last else None,
         datetime.fromisoformat(ok) if ok else None,
     )
 

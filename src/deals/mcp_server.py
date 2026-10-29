@@ -112,7 +112,7 @@ def build_server(service: DealService) -> MCPServer:
         offer_key: Annotated[str, Field(description='The offer_key of an offer from find_offers or watchlist_deals, e.g. "marktguru:123"')],
     ) -> dict[str, Any]:
         """Puts an offer on the household's shopping list in Home Assistant, with its price, chain and
-        validity, e.g. "Meggle Butter 1,29 € (REWE, bis Sa)"."""
+        validity, e.g. "Meggle Butter 1,29 € (REWE, bis Sa 31.10.)"."""
         return _call(service.add_to_shopping_list, offer_key)
 
     @server.resource(

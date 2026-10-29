@@ -294,7 +294,6 @@ def test_status_reports_budget_and_marktguru_health(server, deals, fake_marktgur
     fake_marktguru.search_status = 503
     deals.clock.advance(minutes=5)
     get(server, "/api/find", q="Quark")
-    deals.clock.advance(seconds=marktguru.SEARCH_DEADLINE.total_seconds())
     status = get(server, "/api/status").json()
     assert status["budget"]["used_today"] == 2
     assert status["marktguru"] == {
@@ -308,17 +307,26 @@ def test_status_does_not_count_a_search_still_running(deals, fake_marktguru):
     deals.find_offers("Butter")
     deals.clock.advance(minutes=5)
     with store.open_store(deals.settings.db_path) as conn:
-        store.reserve_search(conn, "quark", "00000", deals.clock(), NOW, marktguru.DAILY_BUDGET)
+        fetch_id = store.reserve_search(conn, "quark", "00000", deals.clock(), NOW, marktguru.DAILY_BUDGET)
     running = deals.status()
     assert running["budget"]["used_today"] == 2
     assert running["marktguru"] == {"health": "ok", "last_search_at": NOW.isoformat(), "last_success_at": NOW.isoformat()}
 
-    deals.clock.advance(seconds=marktguru.SEARCH_DEADLINE.total_seconds())
+    with store.open_store(deals.settings.db_path) as conn:
+        store.fail_fetch(conn, fetch_id)
     assert deals.status()["marktguru"] == {
         "health": "failing",
         "last_search_at": (NOW + timedelta(minutes=5)).isoformat(),
         "last_success_at": NOW.isoformat(),
     }
+
+
+def test_status_is_ok_when_fresh_keys_succeed(deals, fake_marktguru):
+    fake_marktguru.reject_keys = 1
+    deals.find_offers("Butter")
+    status = deals.status()
+    assert status["budget"]["used_today"] == 2
+    assert status["marktguru"]["health"] == "ok"
 
 
 # --- MCP ---
@@ -423,14 +431,15 @@ def test_add_to_shopping_list(server, deals, fake_ha):
         return app_price, twice, upcoming, ended, unknown
 
     app_price, twice, upcoming, ended, unknown = mcp(server)(steps)
-    assert app_price.structured_content["item"] == "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa, App-Preis)"
+    assert app_price.structured_content["item"] == "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 24.10., App-Preis)"
     assert app_price.structured_content["offer"]["validity"] == "bis Sa 24.10."
     assert twice.structured_content["added"] is False
-    assert upcoming.structured_content["item"] == "Weidegold Beste Butter 1,49 € (Markt F, ab Mo)"
+    assert upcoming.structured_content["item"] == "Weidegold Beste Butter 1,49 € (Markt F, ab Mo 26.10. bis Sa 31.10.)"
     assert ended.is_error and "ended on 2026-10-17" in ended.content[0].text
     assert unknown.is_error and "no stored offer 'marktguru:999'" in unknown.content[0].text
     assert fake_ha.summaries(SHOPPING) == [
-        "Milch", "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa, App-Preis)", "Weidegold Beste Butter 1,49 € (Markt F, ab Mo)",
+        "Milch", "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 24.10., App-Preis)",
+        "Weidegold Beste Butter 1,49 € (Markt F, ab Mo 26.10. bis Sa 31.10.)",
     ]
 
 
@@ -439,11 +448,32 @@ def test_add_to_shopping_list_again_on_a_later_day(server, deals, fake_ha):
     first = deals.add_to_shopping_list("marktguru:3")
     deals.clock.advance(days=4)
     again = deals.add_to_shopping_list("marktguru:3")
-    assert first["item"] == "Weidegold Beste Butter 1,49 € (Markt F, ab Mo)"
+    assert first["item"] == "Weidegold Beste Butter 1,49 € (Markt F, ab Mo 26.10. bis Sa 31.10.)"
     assert again["added"] is False
     assert again["offer"]["validity"] == "bis Sa 31.10."
     assert again["item"] == first["item"]
     assert fake_ha.summaries(SHOPPING) == ["Milch", first["item"]]
+
+
+def test_add_to_shopping_list_keeps_offers_of_different_weeks_apart(server, deals, fake_marktguru, fake_ha):
+    fake_marktguru.results["Quark"] = [
+        raw_offer(6, brand="Almhof", product="Quark", retailer="Markt A", price=0.99, category="Quark",
+                  valid_from=date(2026, 10, 19), valid_to=date(2026, 10, 24)),
+        raw_offer(7, brand="Almhof", product="Quark", retailer="Markt A", price=0.99, category="Quark",
+                  valid_from=date(2026, 10, 26), valid_to=date(2026, 10, 31)),
+    ]
+    fake_ha.lists[SHOPPING].append(
+        {"uid": "s2", "summary": "Almhof Quark 0,99 € (Markt A, bis Sa 17.10.)", "status": "needs_action"})
+    deals.find_offers("Quark")
+    current = deals.add_to_shopping_list("marktguru:6")
+    upcoming = deals.add_to_shopping_list("marktguru:7")
+    assert current["added"] is True and upcoming["added"] is True
+    assert fake_ha.summaries(SHOPPING) == [
+        "Milch",
+        "Almhof Quark 0,99 € (Markt A, bis Sa 17.10.)",
+        "Almhof Quark 0,99 € (Markt A, bis Sa 24.10.)",
+        "Almhof Quark 0,99 € (Markt A, ab Mo 26.10. bis Sa 31.10.)",
+    ]
 
 
 def test_write_tools_report_home_assistant_failures(deals, fake_ha):
