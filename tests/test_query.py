@@ -119,6 +119,36 @@ def test_validity_labels():
     assert query.validity_span(starts_monday, SATURDAY, "en") == "from Mon 26 Oct until Sat 31 Oct"
 
 
+@pytest.mark.parametrize(("valid_from", "valid_to", "label"), [
+    (date(2026, 10, 19), THURSDAY, "bis Do 22.10."),
+    (date(2026, 10, 19), date(2026, 10, 23), "bis Fr 23.10."),
+    (date(2026, 10, 19), SATURDAY, "bis Sa 24.10."),
+    (date(2026, 10, 23), SATURDAY, "ab Fr 23.10. bis Sa 24.10."),
+    (date(2026, 10, 23), date(2026, 10, 23), "nur am Fr 23.10."),
+    (date(2026, 11, 2), date(2026, 11, 7), "ab Mo 02.11. bis Sa 07.11."),
+])
+def test_shopping_validity(valid_from, valid_to, label):
+    assert query.shopping_validity(offer_window(valid_from, valid_to), THURSDAY) == label
+
+
+def test_shopping_item():
+    offer = make_offer(title="Feine Butter", brand="Bergwiese", retailer="Markt C", price=1.29, valid_to=SATURDAY)
+    assert query.format_shopping_item(offer, THURSDAY) == "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 24.10.)"
+    app = make_offer(title="Butter", retailer="Markt A", price=None, app_only=True,
+                     valid_from=date(2026, 10, 26), valid_to=date(2026, 10, 31))
+    assert query.format_shopping_item(app, THURSDAY) == "Butter (Markt A, ab Mo 26.10. bis Sa 31.10., App-Preis)"
+
+
+def test_shopping_items_cover_every_day_the_offer_can_be_added():
+    offer = make_offer(title="Feine Butter", brand="Bergwiese", retailer="Markt C", price=1.29,
+                       valid_from=date(2026, 10, 23), valid_to=date(2026, 10, 31))
+    entries = {query.format_shopping_item(offer, day) for day in (THURSDAY, date(2026, 10, 23), date(2026, 10, 30))}
+    assert entries == query.shopping_items(offer) == {
+        "Bergwiese Feine Butter 1,29 € (Markt C, ab Fr 23.10. bis Sa 31.10.)",
+        "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 31.10.)",
+    }
+
+
 def test_one_day_upcoming_offer_names_its_day_once_in_every_output(conn, fake_marktguru):
     thursday, friday = date(2026, 10, 22), date(2026, 10, 23)
     fake_marktguru.results["Butter"] = [

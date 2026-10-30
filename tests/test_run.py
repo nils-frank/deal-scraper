@@ -150,6 +150,23 @@ def test_every_fetched_offer_and_verdict_is_stored(env):
     assert env.escalations == [("Frischkaese", "Frischkaesezubereitung")]
 
 
+def test_finished_run_is_recorded(env):
+    env([{"uid": "w1", "summary": "Frischkaese", "description": None}, {"uid": "w2", "summary": "Tomaten", "description": None}])
+    env.marktguru.results["Frischkaese"] = [frischkaese(1, "Markt A", 1.11)]
+
+    watchlist_run.run()
+
+    with store.open_store(env.db_path) as conn:
+        assert store.last_watchlist_run(conn) == {"finished_at": NOW, "items": ["Frischkaese", "Tomaten"], "new_matches": 1}
+
+
+def test_empty_watchlist_run_is_recorded(env):
+    env([])
+    assert watchlist_run.run() == 0
+    with store.open_store(env.db_path) as conn:
+        assert store.last_watchlist_run(conn) == {"finished_at": NOW, "items": [], "new_matches": 0}
+
+
 def test_llm_yes_is_pushed(env):
     ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
     env.marktguru.results["Frischkaese"] = [raw_offer(2, product="Frischkaesezubereitung", category=None)]

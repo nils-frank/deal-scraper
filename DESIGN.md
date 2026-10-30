@@ -32,7 +32,7 @@ can show more than text. It is built in phases:
 | Phase | Scope | Status |
 |---|---|---|
 | 1. Core | `src/deals/` package; offer store v2 with an in-place migration; Marktguru client with key cache, query cache and a shared daily budget; query engine and `deals find`; category signal and verdict log in the batch run | Built |
-| 2. Service and agents | HTTP API, MCP server and `/healthz` in a long-running container from the same image, sharing the SQLite file; write tools for the watchlist and the shopping list; deploy config in the homelab repo | Planned |
+| 2. Service and agents | HTTP API, MCP server and `/healthz` in a long-running container from the same image, sharing the SQLite file; write tools for the watchlist and the shopping list; deploy config in the homelab repo | Service built (`deals serve`); deploy config and client setup pending |
 | 3. Home Assistant | REST sensor and an image card in the existing Angebote tab of the Overview dashboard, an Assist sentence, an actionable push | Planned |
 | 4. Refinement | MCP Apps cards in Claude Desktop, `price_history`, the keep-or-drop decision on the LLM tier | Planned |
 
@@ -45,6 +45,10 @@ One image, one console script `deals`:
   LLM inside. It produces the same to-do updates and pushes as before.
 - `deals find <query> [--when now|week|upcoming] [--json|--speech]` answers one
   question from the command line.
+- `deals serve [--host] [--port]` is the always-on deal service: the JSON API,
+  the MCP server at `/mcp` and `/healthz` on one port. It runs as a second,
+  long-lived container from the same image next to the batch, on the same
+  SQLite file. The README lists its routes, tools and client setup.
 
 | Module | Role |
 |---|---|
@@ -55,6 +59,9 @@ One image, one console script `deals`:
 | `llm_escalate.py` | Local model for the uncertain middle, batch only |
 | `ha.py` | Home Assistant REST calls |
 | `watchlist_run.py` | The batch run |
+| `service.py` | The deal service's reads and writes, shared by the API and the MCP server |
+| `api.py` | Starlette app: JSON routes, `/healthz`, bearer token check, `/mcp` mounted |
+| `mcp_server.py` | MCP tools, the `deals://status` resource, the `wochenangebote` prompt, server instructions |
 | `cli.py` | Command line |
 
 ### Binding decisions
@@ -105,6 +112,31 @@ One image, one console script `deals`:
   method (`fuzzy`, `category` or `llm`); the logged escalation rate decides
   whether the model stays. Interactive answers carry no model: the calling
   agent judges the candidates.
+- **Deal service (decisions 1, 5, 6, 8 and 13).** One always-on process
+  (`deals serve`) serves Home Assistant and agents from one query engine:
+  - the JSON routes and the MCP tools are thin wrappers over `service.py`, so
+    `/api/find` and `find_offers` give the same answer, and both share the
+    batch's cache and budget through the store file;
+  - every request opens its own SQLite connection; the schema is migrated once
+    at startup;
+  - MCP runs on the official Python SDK (v2) over Streamable HTTP, stateless
+    with JSON responses, so Claude Code connects directly and Claude Desktop
+    through a pinned `mcp-remote` started by a Keychain launcher. The SDK's
+    Host/Origin check is off: it guards localhost servers against DNS
+    rebinding, while this one is reached by its LAN name or address and a
+    rebinding page cannot send the token;
+  - auth is one bearer token from `DEAL_SERVICE_TOKEN` over LAN HTTP, until
+    the homelab's HTTPS name lands. Every path except `/healthz` answers 401
+    without it, and the service refuses to start without a token;
+  - the read tools carry `readOnlyHint`; the write tools (`watchlist_add`,
+    `watchlist_remove`, `add_to_shopping_list`) carry none, so Claude asks
+    before each call. They write Home Assistant to-do lists with the batch's
+    `HA_TOKEN`;
+  - `watchlist_deals` reads the newest verdict per watchlist item and offer
+    from `matches`, for the items of the last finished watchlist run, which
+    the run records in `kv`. It never searches;
+  - `/healthz` reports whether the store answers and the age of the last
+    watchlist run, for the homelab's freshness alert.
 - **No public connector (decision 7): "revisit on concrete need".** The
   service stays LAN-only; see "Future options".
 
@@ -315,9 +347,10 @@ deploy/
 
 Configuration and the HA token come from an env file on the host (see
 `.env.example`), never from the repo. The SQLite file lives in a host directory
-mounted at `/data`. No database container, no NAS mount (the SQLite file is
-disposable dedup state, not a document store), no port (nothing needs to reach
-the container).
+mounted at `/data`. No database container and no port for the batch
+(nothing needs to reach it). The deal service container from phase 2 mounts the
+same directory and publishes one port; its Compose stack lives in the homelab
+repo, and the store's NAS backup is described under "Binding decisions".
 
 ---
 

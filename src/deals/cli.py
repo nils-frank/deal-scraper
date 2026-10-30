@@ -1,8 +1,9 @@
-"""Command line: `deals run-watchlist` (the Docker image's default command) and
-`deals find <query> [--when now|week|upcoming]`.
+"""Command line: `deals run-watchlist` (the Docker image's default command),
+`deals find <query> [--when now|week|upcoming]` and `deals serve`.
 
 Configuration comes from the environment, see `.env.example`. `find` needs only
-DEAL_SCRAPER_PLZ and DB_PATH; `run-watchlist` also needs the Home Assistant values.
+DEAL_SCRAPER_PLZ and DB_PATH; `run-watchlist` also needs the Home Assistant values,
+and `serve` additionally DEAL_SERVICE_TOKEN.
 """
 from __future__ import annotations
 
@@ -30,11 +31,20 @@ def main(argv: list[str] | None = None) -> int:
     output.add_argument("--json", action="store_true", help="print the result as JSON")
     output.add_argument("--speech", action="store_true", help="print the short German answer for Home Assistant")
     find.add_argument("-v", "--verbose", action="store_true", help="log Marktguru and store activity to stderr")
+    serve = commands.add_parser("serve", help="run the deal service: JSON API, MCP server and /healthz on one port")
+    serve.add_argument("--host", default="0.0.0.0", help="address to listen on (default: all)")
+    serve.add_argument("--port", type=int, default=8000, help="port to listen on (default: 8000)")
     args = parser.parse_args(argv)
 
     if args.command == "run-watchlist":
         logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
         return watchlist_run.run()
+    if args.command == "serve":
+        logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+        # Imported here, so the batch and `find` never load the MCP SDK.
+        from deals import api
+
+        return api.serve(args.host, args.port)
 
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format=LOG_FORMAT)
     plz = os.environ.get("DEAL_SCRAPER_PLZ")

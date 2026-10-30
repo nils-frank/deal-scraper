@@ -7,7 +7,7 @@ accepted as request headers.
 
 Marktguru's terms prohibit automated extraction, so traffic stays at "one person
 browsing" scale (DESIGN.md, "Marktguru traffic"). Every caller - the watchlist run,
-`deals find`, the later deal service - goes through `Client`, and all of them share
+`deals find`, the deal service - goes through `Client`, and all of them share
 the store:
 - the keys are cached for KEY_TTL;
 - a search younger than QUERY_TTL for the same normalized query is answered from
@@ -268,8 +268,9 @@ class Client:
                 raise BudgetExhausted()
             try:
                 results, total = self._request(query, *self._keys(refresh=attempt > 0))
-            except StaleKeys as exc:
-                if attempt:
+            except Exception as exc:
+                store.fail_fetch(self.conn, fetch_id)
+                if attempt or not isinstance(exc, StaleKeys):
                     raise
                 log.warning("Marktguru keys rejected, refreshing once: %s", exc)
                 continue

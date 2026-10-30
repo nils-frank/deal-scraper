@@ -2,7 +2,7 @@
 
 One file on the host volume mounted at /data (see deploy/deal-scraper.service),
 shared by every process that reads or fetches offers. WAL mode plus a busy
-timeout let the batch run and a second process (the later deal service) use it
+timeout let the batch run and the deal service (`deals serve`) use it
 at the same time; every multi-statement write takes the write lock up front
 with BEGIN IMMEDIATE.
 
@@ -10,12 +10,14 @@ Tables:
 - offers: every fetched offer, upserted on each fetch (12 months, raw_json 30 days).
 - fetches + fetch_offers: one row per live Marktguru search and the offers it
   returned, in order. This is the query cache and the daily search budget (90 days).
+  A fetch's ok is 0 while the search runs, 1 once it succeeded and -1 once it failed.
 - matches: every watchlist verdict with the method that decided it (12 months).
 - notified_offers: the push dedup table, keyed on offer ID + validity window.
   Each row also keeps the display details (title, retailer, price) of the offer
   it dedups, so the watchlist descriptions can be rebuilt from the still-valid
   rows on every run. Only the watchlist run writes it.
-- kv: small runtime state, such as the cached Marktguru keys.
+- kv: small runtime state, such as the cached Marktguru keys and the time and
+  items of the last finished watchlist run.
 """
 from __future__ import annotations
 
@@ -33,6 +35,7 @@ log = logging.getLogger(__name__)
 DEFAULT_DB_PATH = "/data/deal-scraper.db"
 SCHEMA_VERSION = 2
 BUSY_TIMEOUT_MS = 30_000
+LAST_WATCHLIST_RUN_KV = "last_watchlist_run"
 
 # Retention (decision 3).
 OFFER_RETENTION = timedelta(days=365)
@@ -154,7 +157,9 @@ class Fetch:
 
 
 @contextmanager
-def open_store(db_path: str):
+def open_store(db_path: str, *, migrate: bool = True):
+    """migrate=False skips the schema check, for a long-running process that
+    migrated once at startup and opens a connection per request."""
     # isolation_level=None leaves transactions to `transaction()` below, so
     # single statements autocommit and nothing holds a lock between calls.
     conn = sqlite3.connect(db_path, isolation_level=None)
@@ -162,7 +167,8 @@ def open_store(db_path: str):
         conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
-        _migrate(conn)
+        if migrate:
+            _migrate(conn)
         yield conn
     finally:
         conn.close()
@@ -314,7 +320,7 @@ def reserve_search(
     """Counts the live searches since `day_start` and, if fewer than `budget`,
     records a new one and returns its fetch id. Counting and recording happen
     under one write lock, so concurrent processes can never overrun the budget.
-    The row stays ok=0 until finish_fetch, so a failed search still counts."""
+    The row stays ok=0 until finish_fetch or fail_fetch, and a failed search still counts."""
     with transaction(conn):
         if searches_since(conn, day_start) >= budget:
             return None
@@ -348,6 +354,10 @@ def finish_fetch(conn: sqlite3.Connection, fetch_id: int, now: datetime, offers:
         conn.execute("UPDATE fetches SET ok = 1, total_results = ? WHERE id = ?", (total_results, fetch_id))
 
 
+def fail_fetch(conn: sqlite3.Connection, fetch_id: int) -> None:
+    conn.execute("UPDATE fetches SET ok = -1 WHERE id = ?", (fetch_id,))
+
+
 def latest_fetch(conn: sqlite3.Connection, query_norm: str, plz: str, since: datetime | None = None) -> Fetch | None:
     """The newest successful search for this query, optionally only one younger than `since`."""
     row = conn.execute(
@@ -356,6 +366,26 @@ def latest_fetch(conn: sqlite3.Connection, query_norm: str, plz: str, since: dat
         (query_norm, plz, to_iso(since) if since else ""),
     ).fetchone()
     return Fetch(id=row[0], fetched_at=datetime.fromisoformat(row[1])) if row else None
+
+
+def get_offer(conn: sqlite3.Connection, offer_key: str) -> Offer | None:
+    row = conn.execute(f"SELECT {', '.join(OFFER_COLUMNS)} FROM offers WHERE offer_key = ?", (offer_key,)).fetchone()
+    return _row_to_offer(row) if row else None
+
+
+def last_fetches(conn: sqlite3.Connection) -> tuple[datetime | None, bool | None, datetime | None]:
+    """(time of the newest finished live search, whether it succeeded, time of the
+    newest successful one), for the service's Marktguru health. A search still
+    running does not count yet."""
+    last = conn.execute(
+        "SELECT fetched_at, ok FROM fetches WHERE ok != 0 ORDER BY fetched_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+    ok = conn.execute("SELECT MAX(fetched_at) FROM fetches WHERE ok = 1").fetchone()[0]
+    return (
+        datetime.fromisoformat(last[0]) if last else None,
+        last[1] == 1 if last else None,
+        datetime.fromisoformat(ok) if ok else None,
+    )
 
 
 def fetch_offers(conn: sqlite3.Connection, fetch_id: int) -> list[Offer]:
@@ -398,6 +428,36 @@ def record_match(
         "INSERT INTO matches (watchlist_item, offer_key, score, decision, method, decided_at) VALUES (?, ?, ?, ?, ?, ?)",
         (watchlist_item, offer_key, score, decision, method, to_iso(now)),
     )
+
+
+def matched_offers(conn: sqlite3.Connection, today: date) -> dict[str, list[Offer]]:
+    """Per watchlist item, the offers its newest verdict accepted that have not
+    ended before `today`. What the watchlist run matched, read without a search."""
+    rows = conn.execute(
+        f"SELECT m.watchlist_item, {', '.join('o.' + c for c in OFFER_COLUMNS)} FROM matches m "
+        "JOIN offers o ON o.offer_key = m.offer_key "
+        "WHERE m.id IN (SELECT MAX(id) FROM matches GROUP BY watchlist_item, offer_key) "
+        "AND m.decision = 'match' AND o.valid_to >= ? ORDER BY m.watchlist_item",
+        (today.isoformat(),),
+    ).fetchall()
+    matched: dict[str, list[Offer]] = {}
+    for item, *offer in rows:
+        matched.setdefault(item, []).append(_row_to_offer(offer))
+    return matched
+
+
+def record_watchlist_run(conn: sqlite3.Connection, now: datetime, items: list[str], new_matches: int) -> None:
+    """Marks a watchlist run as finished, for the service's status and /healthz."""
+    set_kv(conn, LAST_WATCHLIST_RUN_KV, json.dumps({"items": items, "new_matches": new_matches}, ensure_ascii=False), now)
+
+
+def last_watchlist_run(conn: sqlite3.Connection) -> dict | None:
+    """{"finished_at", "items", "new_matches"} of the newest finished watchlist run."""
+    row = get_kv(conn, LAST_WATCHLIST_RUN_KV)
+    if row is None:
+        return None
+    value, finished_at = row
+    return {"finished_at": finished_at, **json.loads(value)}
 
 
 def get_kv(conn: sqlite3.Connection, key: str) -> tuple[str, datetime] | None:

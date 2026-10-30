@@ -57,6 +57,8 @@ RUN useradd -u 1000 -m scraper && mkdir -p /data && chown scraper:scraper /data
 USER scraper
 
 # No arguments runs the watchlist batch, as the systemd unit in deploy/ expects;
-# `docker run ... deal-scraper:local find Butter` runs a one-off query instead.
+# `docker run ... deal-scraper:local find Butter` runs a one-off query, and
+# `docker run ... deal-scraper:local serve` the long-running deal service.
+EXPOSE 8000
 ENTRYPOINT ["deals"]
 CMD ["run-watchlist"]

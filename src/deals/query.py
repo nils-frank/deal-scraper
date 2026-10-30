@@ -65,21 +65,13 @@ class FindResult:
         return self.source != "live"
 
     def to_dict(self) -> dict:
-        def group_dict(group: OfferGroup) -> dict:
-            return {
-                "name": group.name,
-                "offers": [
-                    {**offer.to_dict(), "validity": validity_span(offer, self.today, "de")} for offer in group.offers
-                ],
-            }
-
         return {
             "query": self.query,
             "when": self.when,
             "today": self.today.isoformat(),
             "reference_day": self.reference_day.isoformat(),
-            "current": [group_dict(g) for g in self.current],
-            "upcoming": [group_dict(g) for g in self.upcoming],
+            "current": [group_to_dict(g, self.today) for g in self.current],
+            "upcoming": [group_to_dict(g, self.today) for g in self.upcoming],
             "excluded_categories": self.excluded_categories,
             "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None,
             "from_cache": self.from_cache,
@@ -87,6 +79,22 @@ class FindResult:
             "budget_left": self.budget_left,
             "error": self.error,
         }
+
+
+def group_to_dict(group: OfferGroup, today: date) -> dict:
+    """A group as JSON; every offer carries its validity span relative to today,
+    as the German label ("bis Sa 24.10.") and in English ("until Sat 24 Oct")."""
+    return {
+        "name": group.name,
+        "offers": [
+            {
+                **offer.to_dict(),
+                "validity": validity_span(offer, today, "de"),
+                "validity_en": validity_span(offer, today, "en"),
+            }
+            for offer in group.offers
+        ],
+    }
 
 
 def reference_day(today: date) -> date:
@@ -208,6 +216,15 @@ def validity_span(offer: Offer, today: date, style: str) -> str:
         # "nur morgen": "am Morgen" would mean "in the morning".
         return f"nur {start}" if start == "morgen" else single.format(start=start)
     return span.format(start=start, end=day(offer.valid_to, today))
+
+
+def shopping_validity(offer: Offer, today: date) -> str:
+    """The span on a shopping list entry, with weekday and date so it still reads
+    right days later: "bis Sa 31.10.", or before the offer starts
+    "ab Mo 02.11. bis Sa 07.11." and "nur am Fr 23.10."."""
+    if offer.valid_from > today:
+        return validity_span(offer, today, "de")
+    return f"bis {_day_de(offer.valid_to)}"
 
 
 def _subject(query: str) -> str:
@@ -378,3 +395,17 @@ def format_speech(result: FindResult, now: datetime) -> str:
     if result.source == "store" and result.fetched_at is not None:
         sentences.append(f"Stand: {_age_de(result.fetched_at, now)}.")
     return " ".join(sentences)
+
+
+def format_shopping_item(offer: Offer, today: date) -> str:
+    """A shopping list entry: "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 24.10.)",
+    with "App-Preis" when the price needs the chain's app."""
+    price = f" {_euro_de(offer.price)}" if offer.price is not None else ""
+    details = [offer.retailer, shopping_validity(offer, today)] + (["App-Preis"] if offer.app_only else [])
+    return f"{offer.name}{price} ({', '.join(details)})"
+
+
+def shopping_items(offer: Offer) -> set[str]:
+    """Every entry format_shopping_item gives this offer on any day: the one from
+    before it starts and the one once it runs."""
+    return {format_shopping_item(offer, day) for day in (offer.valid_from - timedelta(days=1), offer.valid_from)}
