@@ -7,7 +7,8 @@ service and the batch share one Marktguru cache and one daily search budget.
 Read calls never write notified_offers or the match log.
 
 The write calls change Home Assistant to-do lists through `ha`, with the same
-HA_TOKEN the batch uses: the watchlist and the shopping list.
+HA_TOKEN the batch uses: the watchlist and the shopping list. `mute` is the one
+write to the store: it marks an offer the watchlist run never pushes again.
 """
 from __future__ import annotations
 
@@ -273,6 +274,18 @@ class DealService:
             return {"added": False, "item": existing["summary"], "list": entity, "reason": "already on the shopping list", "offer": offer_dict}
         self._ha(ha.add_todo_item, entity, text)
         return {"added": True, "item": text, "list": entity, "offer": offer_dict}
+
+    def mute(self, offer_key: str) -> dict:
+        """"Nicht mehr melden" on the push: the watchlist run never pushes this offer
+        again. Muting it twice changes nothing."""
+        now = self.clock()
+        with self._store() as conn:
+            offer = store.get_offer(conn, (offer_key or "").strip())
+            if offer is None:
+                raise NotFound(f"no stored offer {offer_key!r}; pass an offer_key from find_offers or watchlist_deals")
+            newly_muted = store.mute_offer(conn, offer.offer_id, now)
+        offer_dict = {**offer.to_dict(), "validity": query.validity_span(offer, local_date(now), "de")}
+        return {"muted": True, "already_muted": not newly_muted, "offer": offer_dict}
 
     @staticmethod
     def _ha(call, *args):

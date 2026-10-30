@@ -33,9 +33,9 @@ use.
    good enough and 1.5B was.
 4. **Dedup** - a SQLite table tracks what's already been notified about, so the same
    offer doesn't get re-pushed on every run until it expires (`src/deals/store.py`).
-5. **Notify** - a Home Assistant push notification for new matches, plus the matched
-   offers get written into a to-do list for the shopping trip
-   (`src/deals/watchlist_run.py`).
+5. **Notify** - one actionable Home Assistant push per watchlist item with new
+   matches, plus the matched offers get written into a to-do list for the shopping
+   trip (`src/deals/watchlist_run.py`). See "The push" below.
 
 ## A note on Marktguru's API
 
@@ -79,6 +79,8 @@ See `deploy/` for an example systemd service + timer pair to run it twice weekly
 | `GET /api/find?q=Butter&when=now` | The `find_offers` answer as JSON, plus `speech`, the short German sentence for Home Assistant Assist. Optional `stores=REWE,Lidl` and `limit=` |
 | `GET /api/watchlist?when=week` | The `watchlist_deals` answer, for a Home Assistant REST sensor |
 | `GET /api/status` | The `deals://status` answer |
+| `POST /api/shopping-list` with `{"offer_key": "..."}` | Puts the offer on the shopping list: the same behavior and answer as the MCP tool `add_to_shopping_list` |
+| `POST /api/mute` with `{"offer_key": "..."}` | Mutes the offer: the watchlist run never pushes it again. Muting twice changes nothing; the answer is `{"muted": true, "already_muted": ..., "offer": {...}}` |
 | `/mcp` | The MCP server, Streamable HTTP (stateless, JSON responses) |
 | `GET /healthz` | Whether the store answers, and the age of the last watchlist run. Open, no token |
 
@@ -95,6 +97,38 @@ docker run -d --name deal-service --env-file .env -v $(pwd)/data:/data -p 8000:8
 curl http://localhost:8000/healthz
 curl -H "Authorization: Bearer $DEAL_SERVICE_TOKEN" "http://localhost:8000/api/find?q=Butter"
 ```
+
+An unknown `offer_key` answers 404, a body without a non-empty string `offer_key`
+answers 400, and a Home Assistant failure on the shopping list answers 502.
+
+### The push
+
+The watchlist run sends one notification per watchlist item that has new offers in
+that run, through `notify.<NOTIFY_SERVICE>`. Offers already pushed for that item are
+never pushed again, and muted offers are left out; an item whose new offers are all
+muted gets no push. The title is `Angebot: <item>`, and the message names the item's
+new offers, current ones first, each group cheapest first, with price, chain and a
+short German validity span (at most five, then "und N weitere"):
+
+```
+Philadelphia 1,11 € bei REWE bis Sa
+Philadelphia 1,29 € bei Lidl bis Sa (App-Preis)
+Philadelphia 0,99 € bei Aldi Süd ab Mo bis Sa 07.11.
+```
+
+Within the coming week a day is named by its weekday alone, later ones carry the date.
+`data` carries:
+
+| Key | Value |
+|---|---|
+| `actions` | `{"action": "DEALS_ADD:<offer_key>", "title": "Auf Einkaufsliste"}` and `{"action": "DEALS_MUTE:<offer_key>", "title": "Nicht mehr melden"}`, both for the item's cheapest current offer, or the cheapest upcoming one when none runs yet |
+| `url`, `clickAction` | The tap target from `NOTIFY_URL` (default `DASHBOARD_PATH`, `/lovelace/deal-scraper`). Set a full URL when the Companion App does not navigate to the relative path |
+| `tag` | `deal-scraper-<item>`, so a later push for the same item replaces the earlier one |
+| `group` | `deal-scraper` |
+
+One Home Assistant automation on `mobile_app_notification_action` handles both
+actions: it splits the action at the first `:` and calls `POST /api/shopping-list`
+or `POST /api/mute` with the rest as `offer_key` and the service token.
 
 ### MCP tools
 

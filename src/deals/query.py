@@ -193,6 +193,15 @@ def _spoken_day(day: date, today: date) -> str:
     return f"{day.day}. {MONTHS_DE[day.month - 1]}"
 
 
+def _short_day(day: date, today: date) -> str:
+    """The weekday alone within the coming week, for a push that is read at once."""
+    if day == today:
+        return "heute"
+    if today < day < today + timedelta(days=7):
+        return WEEKDAYS_DE[day.weekday()]
+    return _day_de(day)
+
+
 # style: (day wording, "from start until end", "only on start", "until end")
 _SPAN_WORDS = {
     "en": (lambda day, today: f"today ({_day_en(day)})" if day == today else _day_en(day),
@@ -200,14 +209,16 @@ _SPAN_WORDS = {
     "de": (lambda day, today: f"heute ({_day_de(day)})" if day == today else _day_de(day),
            "ab {start} bis {end}", "nur am {start}", "bis {end}"),
     "spoken": (_spoken_day, "ab {start} bis {end}", "nur am {start}", "bis {end}"),
+    "short": (_short_day, "ab {start} bis {end}", "nur am {start}", "bis {end}"),
 }
 
 
 def validity_span(offer: Offer, today: date, style: str) -> str:
-    """The validity span in every output ("en" text, "de" JSON label, "spoken" German):
+    """The validity span in every output ("en" text, "de" JSON label, "spoken" German,
+    "short" German for the push):
     an offer starting after today gives start and end, or only its day when it runs
     for one day; an offer that already runs gives its end.
-    E.g. "from Mon 26 Oct until Sat 31 Oct", "nur am Fr 23.10.", "bis heute"."""
+    E.g. "from Mon 26 Oct until Sat 31 Oct", "nur am Fr 23.10.", "bis heute", "ab Mo bis Sa"."""
     day, span, single, until = _SPAN_WORDS[style]
     if offer.valid_from <= today:
         return until.format(end=day(offer.valid_to, today))
@@ -395,6 +406,14 @@ def format_speech(result: FindResult, now: datetime) -> str:
     if result.source == "store" and result.fetched_at is not None:
         sentences.append(f"Stand: {_age_de(result.fetched_at, now)}.")
     return " ".join(sentences)
+
+
+def format_push_line(offer: Offer, today: date) -> str:
+    """One offer in the watchlist push: "Philadelphia 1,11 € bei REWE bis Sa",
+    "ab Mo bis Sa" before it starts, with "App-Preis" when it needs the chain's app."""
+    price = f" {_euro_de(offer.price)}" if offer.price is not None else ""
+    app = " (App-Preis)" if offer.app_only else ""
+    return f"{offer.name}{price} bei {offer.retailer} {validity_span(offer, today, 'short')}{app}"
 
 
 def format_shopping_item(offer: Offer, today: date) -> str:

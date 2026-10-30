@@ -482,6 +482,107 @@ def test_write_tools_report_home_assistant_failures(deals, fake_ha):
         deals.watchlist_add("Quark")
 
 
+# --- push actions: POST /api/shopping-list and /api/mute ---
+
+
+def post(server, path, body, headers=AUTH):
+    return requests.post(f"{server}{path}", json=body, headers=headers, timeout=10)
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}])
+@pytest.mark.parametrize("path", ["/api/shopping-list", "/api/mute"])
+def test_push_actions_need_the_token(server, deals, fake_ha, path, headers):
+    get(server, "/api/find", q="Butter")
+    response = post(server, path, {"offer_key": "marktguru:1"}, headers=headers)
+    assert response.status_code == 401
+    assert fake_ha.writes == []
+    with store.open_store(deals.settings.db_path) as conn:
+        assert not store.is_muted(conn, "marktguru:1")
+
+
+def test_api_shopping_list_answers_like_the_mcp_tool(server, deals, fake_ha):
+    get(server, "/api/find", q="Butter")
+    first = post(server, "/api/shopping-list", {"offer_key": "marktguru:2"})
+    twice = post(server, "/api/shopping-list", {"offer_key": "marktguru:2"})
+
+    assert first.status_code == 200
+    assert first.json() == {
+        "added": True,
+        "item": "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 24.10., App-Preis)",
+        "list": SHOPPING,
+        "offer": first.json()["offer"],
+    }
+    assert first.json()["offer"]["offer_key"] == "marktguru:2"
+    assert first.json()["offer"]["validity"] == "bis Sa 24.10."
+    assert twice.status_code == 200
+    assert twice.json()["added"] is False
+    assert twice.json()["reason"] == "already on the shopping list"
+    assert fake_ha.summaries(SHOPPING) == ["Milch", "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 24.10., App-Preis)"]
+
+    async def steps(client):
+        return await client.call_tool("add_to_shopping_list", {"offer_key": "marktguru:2"})
+
+    assert mcp(server)(steps).structured_content == twice.json()
+
+
+def test_api_shopping_list_errors(server, deals, fake_ha):
+    get(server, "/api/find", q="Butter")
+    unknown = post(server, "/api/shopping-list", {"offer_key": "marktguru:999"})
+    ended = post(server, "/api/shopping-list", {"offer_key": "marktguru:5"})
+    assert unknown.status_code == 404
+    assert "no stored offer 'marktguru:999'" in unknown.json()["error"]
+    assert ended.status_code == 400
+    assert "ended on 2026-10-17" in ended.json()["error"]
+    fake_ha.status = 500
+    failing = post(server, "/api/shopping-list", {"offer_key": "marktguru:1"})
+    assert failing.status_code == 502
+    assert fake_ha.summaries(SHOPPING) == ["Milch"]
+
+
+def test_api_mute_is_idempotent(server, deals, fake_ha):
+    get(server, "/api/find", q="Butter")
+    first = post(server, "/api/mute", {"offer_key": "marktguru:1"})
+    twice = post(server, "/api/mute", {"offer_key": "marktguru:1"})
+
+    assert first.status_code == twice.status_code == 200
+    assert first.json()["muted"] is True and first.json()["already_muted"] is False
+    assert twice.json()["muted"] is True and twice.json()["already_muted"] is True
+    assert first.json()["offer"]["offer_key"] == "marktguru:1"
+    assert first.json()["offer"]["validity"] == "bis Sa 24.10."
+    with store.open_store(deals.settings.db_path) as conn:
+        assert store.is_muted(conn, "marktguru:1")
+        assert not store.is_muted(conn, "marktguru:2")
+        assert conn.execute("SELECT COUNT(*) FROM muted_offers").fetchone()[0] == 1
+    # Muting touches no Home Assistant list.
+    assert fake_ha.writes == []
+
+
+def test_api_mute_unknown_offer(server, deals):
+    response = post(server, "/api/mute", {"offer_key": "marktguru:999"})
+    assert response.status_code == 404
+    assert "no stored offer 'marktguru:999'" in response.json()["error"]
+    with store.open_store(deals.settings.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM muted_offers").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("path", ["/api/shopping-list", "/api/mute"])
+@pytest.mark.parametrize("body", [[], {}, "marktguru:1", {"offer_key": ""}, {"offer_key": 1}, {"key": "marktguru:1"}])
+def test_push_actions_reject_bad_bodies(server, fake_ha, path, body):
+    response = post(server, path, body)
+    assert response.status_code == 400
+    assert response.json() == {"error": 'the body must be {"offer_key": "..."}'}
+
+
+def test_push_actions_reject_a_body_that_is_not_json(server):
+    response = requests.post(f"{server}/api/mute", data="offer_key=marktguru:1", headers=AUTH, timeout=10)
+    assert response.status_code == 400
+    assert response.json() == {"error": "the body must be JSON"}
+
+
+def test_push_actions_are_post_only(server):
+    assert get(server, "/api/mute", offer_key="marktguru:1").status_code == 405
+
+
 # --- configuration ---
 
 

@@ -3,6 +3,8 @@
 - GET /api/find?q=&when=&stores=&limit=  the find_offers answer, with the German speech text
 - GET /api/watchlist?when=               the watchlist_deals answer
 - GET /api/status                        the deals://status answer
+- POST /api/shopping-list {"offer_key"}  the add_to_shopping_list answer, for the push action
+- POST /api/mute {"offer_key"}           mutes an offer for the watchlist push
 - /mcp                                   the MCP server (`mcp_server.py`)
 - GET /healthz                           store reachability and the age of the last watchlist run
 
@@ -18,6 +20,7 @@ import sys
 import uvicorn
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.middleware import Middleware
 from starlette.requests import Request
@@ -70,6 +73,18 @@ def _limit(request: Request) -> int:
         raise InvalidRequest("limit must be a number") from None
 
 
+async def _offer_key(request: Request) -> str:
+    """The offer_key of a JSON body {"offer_key": "..."}."""
+    try:
+        body = await request.json()
+    except ValueError:
+        raise InvalidRequest("the body must be JSON") from None
+    offer_key = body.get("offer_key") if isinstance(body, dict) else None
+    if not isinstance(offer_key, str) or not offer_key.strip():
+        raise InvalidRequest('the body must be {"offer_key": "..."}')
+    return offer_key
+
+
 def create_app(service: DealService) -> Starlette:
     mcp_app = mcp_server.build_server(service).streamable_http_app(
         streamable_http_path="/mcp",
@@ -93,6 +108,17 @@ def create_app(service: DealService) -> Starlette:
     def status(request: Request) -> JSONResponse:
         return _answer(service.status)
 
+    def offer_action(call):
+        # Reading the body is async; the store and Home Assistant calls block.
+        async def endpoint(request: Request) -> JSONResponse:
+            try:
+                offer_key = await _offer_key(request)
+            except InvalidRequest as exc:
+                return JSONResponse({"error": str(exc)}, status_code=exc.status)
+            return await run_in_threadpool(_answer, call, offer_key)
+
+        return endpoint
+
     def healthz(request: Request) -> JSONResponse:
         ok, body = service.health()
         return JSONResponse(body, status_code=200 if ok else 503)
@@ -103,6 +129,8 @@ def create_app(service: DealService) -> Starlette:
             Route("/api/find", find),
             Route("/api/watchlist", watchlist),
             Route("/api/status", status),
+            Route("/api/shopping-list", offer_action(service.add_to_shopping_list), methods=["POST"]),
+            Route("/api/mute", offer_action(service.mute), methods=["POST"]),
             *mcp_app.routes,
         ],
         middleware=[Middleware(BearerAuth, token=service.settings.token)],

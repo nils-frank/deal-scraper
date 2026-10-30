@@ -11,10 +11,9 @@ from __future__ import annotations
 
 import logging
 import os
-from collections import Counter
 from datetime import date
 
-from deals import ha, marktguru, store
+from deals import ha, marktguru, query, store
 from deals.llm_escalate import escalate
 from deals.match import MatchDecision, MatchMethod, classify_all
 from deals.schema import local_date, utcnow
@@ -24,6 +23,15 @@ log = logging.getLogger(__name__)
 TODO_ENTITY_ID = os.environ.get("TODO_ENTITY_ID", "todo.lebensmittel_prospekt_tracker")
 ANGEBOTE_ENTITY_ID = os.environ.get("ANGEBOTE_ENTITY_ID", "todo.aktuelle_angebote")
 DASHBOARD_PATH = os.environ.get("DASHBOARD_PATH", "/lovelace/deal-scraper")
+# Where tapping the push leads. A full URL ("https://<ha-host>/lovelace/...") rather
+# than the relative path works around the Companion App not navigating on tap.
+NOTIFY_URL = os.environ.get("NOTIFY_URL", DASHBOARD_PATH)
+# Offers named in one push; the rest are counted.
+PUSH_OFFERS = 5
+# Action IDs of the push buttons, handled by a Home Assistant automation on
+# mobile_app_notification_action that calls POST /api/shopping-list or /api/mute.
+ADD_ACTION = "DEALS_ADD"
+MUTE_ACTION = "DEALS_MUTE"
 
 
 def format_validity(offer, today: date) -> str:
@@ -66,12 +74,35 @@ def format_angebote_line(offer, today: date) -> str:
     return f"{offer.title} - {format_todo_description(offer, today)}"
 
 
-def format_push_message(offers, today: date) -> str:
-    future_starts = Counter(offer.valid_from for offer in offers if offer.valid_from > today)
-    if not future_starts:
-        return f"{len(offers)} neue(s) Angebot(e) gefunden - siehe Einkaufsliste."
-    starts = ", ".join(f"{count} ab {start.isoformat()}" for start, count in sorted(future_starts.items()))
-    return f"{len(offers)} neue(s) Angebot(e) gefunden, davon {starts} - siehe Einkaufsliste."
+def push_order(offers, today: date) -> list:
+    """Current offers first, then upcoming ones, each cheapest first."""
+    return sorted(offers, key=lambda o: (o.valid_from > today, o.price is None, o.price or 0.0, o.valid_from, o.retailer))
+
+
+def build_push(item_summary: str, offers, today: date) -> dict:
+    """The push for one watchlist item's new offers: one line per offer with its
+    validity span, and the two actions for the first of them, the cheapest
+    current offer or, when none runs yet, the cheapest upcoming one."""
+    ordered = push_order(offers, today)
+    lines = [query.format_push_line(offer, today) for offer in ordered[:PUSH_OFFERS]]
+    if len(ordered) > PUSH_OFFERS:
+        lines.append(f"und {len(ordered) - PUSH_OFFERS} weitere")
+    key = ordered[0].offer_id
+    return {
+        "title": f"Angebot: {item_summary}",
+        "message": "\n".join(lines),
+        "data": {
+            # One notification per item, so a later push for it replaces this one.
+            "tag": f"deal-scraper-{item_summary}",
+            "group": "deal-scraper",
+            "url": NOTIFY_URL,
+            "clickAction": NOTIFY_URL,
+            "actions": [
+                {"action": f"{ADD_ACTION}:{key}", "title": "Auf Einkaufsliste"},
+                {"action": f"{MUTE_ACTION}:{key}", "title": "Nicht mehr melden"},
+            ],
+        },
+    }
 
 
 def sync_watchlist_descriptions(conn, watchlist: list[dict], today: date) -> None:
@@ -97,8 +128,8 @@ def run() -> int:
     notify_service = os.environ["NOTIFY_SERVICE"]
     db_path = os.environ.get("DB_PATH", store.DEFAULT_DB_PATH)
     log.info(
-        "Starting run: PLZ=%s TODO_ENTITY_ID=%s ANGEBOTE_ENTITY_ID=%s NOTIFY_SERVICE=%s DB_PATH=%s DASHBOARD_PATH=%s",
-        plz, TODO_ENTITY_ID, ANGEBOTE_ENTITY_ID, notify_service, db_path, DASHBOARD_PATH,
+        "Starting run: PLZ=%s TODO_ENTITY_ID=%s ANGEBOTE_ENTITY_ID=%s NOTIFY_SERVICE=%s DB_PATH=%s NOTIFY_URL=%s",
+        plz, TODO_ENTITY_ID, ANGEBOTE_ENTITY_ID, notify_service, db_path, NOTIFY_URL,
     )
     watchlist = ha.get_todo_items(TODO_ENTITY_ID)
     if not watchlist:
@@ -111,6 +142,7 @@ def run() -> int:
     now = utcnow()
     today = local_date(now)
     notified_offers = []
+    pushes = []
     escalation_count = 0
 
     with store.open_store(db_path) as conn:
@@ -185,24 +217,26 @@ def run() -> int:
                 )
                 continue
 
+            to_push = []
             for score, offer in new_offers:
                 store.record_notified(conn, offer, item_summary, item_summary)
                 notified_offers.append(offer)
                 log.info("  NEW MATCH (score=%.0f): %s bei %s", score, offer.title, offer.retailer)
+                if store.is_muted(conn, offer.offer_id):
+                    log.info("  MUTED: %r is not pushed", offer.title)
+                else:
+                    to_push.append(offer)
+            if to_push:
+                pushes.append(build_push(item_summary, to_push, today))
 
         sync_watchlist_descriptions(conn, watchlist, today)
         store.record_watchlist_run(conn, utcnow(), [i["summary"] for i in watchlist], len(notified_offers))
 
-    if notified_offers:
+    for push in pushes:
         try:
-            ha.notify(
-                notify_service,
-                format_push_message(notified_offers, today),
-                title="Prospekt-Check",
-                data={"tag": "deal-scraper", "url": DASHBOARD_PATH},
-            )
+            ha.notify(notify_service, push["message"], title=push["title"], data=push["data"])
         except Exception:
-            log.exception("Summary notify failed.")
+            log.exception("Notify failed for %r, continuing.", push["title"])
 
     log.info(
         "Done. %d new match(es), %d escalated to the local model.",

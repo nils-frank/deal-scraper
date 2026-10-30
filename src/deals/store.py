@@ -16,6 +16,8 @@ Tables:
   Each row also keeps the display details (title, retailer, price) of the offer
   it dedups, so the watchlist descriptions can be rebuilt from the still-valid
   rows on every run. Only the watchlist run writes it.
+- muted_offers: offers the household asked never to be pushed again ("Nicht mehr
+  melden" on the push). Rows go with their offer when retention drops it.
 - kv: small runtime state, such as the cached Marktguru keys and the time and
   items of the last finished watchlist run.
 """
@@ -63,6 +65,13 @@ ADDED_COLUMNS = [
     ("retailer", "TEXT"),
     ("price", "REAL"),
 ]
+
+MUTED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS muted_offers (
+    offer_key TEXT PRIMARY KEY REFERENCES offers (offer_key) ON DELETE CASCADE,
+    muted_at  TEXT NOT NULL
+)
+"""
 
 V2_SCHEMA = [
     """
@@ -202,17 +211,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "UPDATE notified_offers SET angebote_summary = watchlist_summary "
             "WHERE angebote_summary IS NULL"
         )
-        if version >= SCHEMA_VERSION:
-            return
-        for statement in V2_SCHEMA:
-            conn.execute(statement)
-        # v1 took valid_from as the UTC date of Marktguru's start instant, which is
-        # local midnight and so 22:00 or 23:00 UTC on the day before. v2 reads both
-        # ends in local time; shifting the v1 rows keeps their dedup keys matching
-        # the same offers, so nothing already pushed is pushed again.
-        shifted = conn.execute("UPDATE notified_offers SET valid_from = date(valid_from, '+1 day')").rowcount
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        log.info("Migrated store from schema v%d to v%d (%d dedup row(s) re-dated)", version, SCHEMA_VERSION, shifted)
+        if version < SCHEMA_VERSION:
+            for statement in V2_SCHEMA:
+                conn.execute(statement)
+            # v1 took valid_from as the UTC date of Marktguru's start instant, which is
+            # local midnight and so 22:00 or 23:00 UTC on the day before. v2 reads both
+            # ends in local time; shifting the v1 rows keeps their dedup keys matching
+            # the same offers, so nothing already pushed is pushed again.
+            shifted = conn.execute("UPDATE notified_offers SET valid_from = date(valid_from, '+1 day')").rowcount
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            log.info("Migrated store from schema v%d to v%d (%d dedup row(s) re-dated)", version, SCHEMA_VERSION, shifted)
+        # Added within v2; it references offers, so it comes after the v2 tables.
+        conn.execute(MUTED_SCHEMA)
 
 
 # --- notified_offers: push dedup, written only by the watchlist run ---
@@ -309,6 +319,20 @@ def prune_expired(conn: sqlite3.Connection, before: date) -> list[str]:
         before, removed, len(stale_summaries),
     )
     return stale_summaries
+
+
+# --- muted_offers: offers never pushed again ---
+
+
+def mute_offer(conn: sqlite3.Connection, offer_key: str, now: datetime) -> bool:
+    """Mutes a stored offer; False when it already was muted."""
+    return conn.execute(
+        "INSERT OR IGNORE INTO muted_offers (offer_key, muted_at) VALUES (?, ?)", (offer_key, to_iso(now))
+    ).rowcount == 1
+
+
+def is_muted(conn: sqlite3.Connection, offer_key: str) -> bool:
+    return conn.execute("SELECT 1 FROM muted_offers WHERE offer_key = ?", (offer_key,)).fetchone() is not None
 
 
 # --- offers and the fetch log ---

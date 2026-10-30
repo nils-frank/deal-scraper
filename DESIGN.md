@@ -17,9 +17,11 @@ offers (per store one line for its cheapest offer valid today and one for its
 cheapest upcoming offer, current offers first, each group cheapest first,
 cleared once all of them have expired), pushes the full match list to a
 live-updating dashboard view ("Angebote", `lovelace/deal-scraper`), and sends
-**one** consolidated push per run instead of one per match. An offer that starts later shows "ab <date>" in
-the descriptions and the push. See `OPERATIONS.md` for the current known issues
-with this (tap-to-navigate on the push not yet working).
+one push per watchlist item with new matches, instead of one per match. An offer that starts later shows "ab <date>" in
+the descriptions and the push. Phase 3 made that push actionable, see "Actionable
+push" below. See `OPERATIONS.md` for the current known issues with this
+(tap-to-navigate on the push not yet working; `NOTIFY_URL` takes the full URL
+that is the first check against it).
 
 ## Current design: a homelab deal service (architecture B)
 
@@ -33,7 +35,7 @@ can show more than text. It is built in phases:
 |---|---|---|
 | 1. Core | `src/deals/` package; offer store v2 with an in-place migration; Marktguru client with key cache, query cache and a shared daily budget; query engine and `deals find`; category signal and verdict log in the batch run | Built |
 | 2. Service and agents | HTTP API, MCP server and `/healthz` in a long-running container from the same image, sharing the SQLite file; write tools for the watchlist and the shopping list; deploy config in the homelab repo | Service built (`deals serve`); deploy config and client setup pending |
-| 3. Home Assistant | REST sensor and an image card in the existing Angebote tab of the Overview dashboard, an Assist sentence, an actionable push | Planned |
+| 3. Home Assistant | REST sensor and an image card in the existing Angebote tab of the Overview dashboard, an Assist sentence, an actionable push | Push and its routes built in deal-scraper; Home Assistant config in the homelab repo |
 | 4. Refinement | MCP Apps cards in Claude Desktop, `price_history`, the keep-or-drop decision on the LLM tier | Planned |
 
 ### Layout
@@ -69,7 +71,8 @@ One image, one console script `deals`:
 - **Store (decision 3): SQLite on `raspi4-02` local disk.** Tables `offers`
   (every fetched offer, upserted on each fetch), `fetches` plus `fetch_offers`
   (one row per live search and the offers it returned), `matches` (every
-  watchlist verdict), the unchanged `notified_offers` dedup table, and `kv`
+  watchlist verdict), the unchanged `notified_offers` dedup table,
+  `muted_offers` (offers never pushed again, see "Actionable push"), and `kv`
   for the cached Marktguru keys. WAL mode and a busy timeout let a second
   process share the file; multi-statement writes take the lock up front.
   Opening a v1 database migrates it in place (`PRAGMA user_version` 2). v1
@@ -137,6 +140,29 @@ One image, one console script `deals`:
     the run records in `kv`. It never searches;
   - `/healthz` reports whether the store answers and the age of the last
     watchlist run, for the homelab's freshness alert.
+- **Actionable push (decision 9, 6h).** The push lists the actual offers
+  instead of "N neue Angebote - siehe Einkaufsliste", with two actions that one
+  Home Assistant automation on `mobile_app_notification_action` handles. The
+  contract with that automation:
+  - one notification per watchlist item that has new offers in a run, not one
+    per offer. The message names the item's offers, cheapest current first,
+    each with price, chain and short German validity ("Philadelphia 1,11 € bei
+    REWE bis Sa"); upcoming ones read "ab Mo bis ...";
+  - actions `DEALS_ADD:<offer_key>` ("Auf Einkaufsliste") and
+    `DEALS_MUTE:<offer_key>` ("Nicht mehr melden"), both for the item's
+    cheapest current offer, or the cheapest upcoming one when none runs yet;
+  - `POST /api/shopping-list` with `{"offer_key": "..."}` behaves and answers
+    like the MCP tool `add_to_shopping_list` (decision 8: absolute label on
+    `todo.mealie_lebensmittel`, no duplicate entry);
+  - `POST /api/mute` with `{"offer_key": "..."}` records the offer in
+    `muted_offers`, and the watchlist run never pushes it again; muting twice
+    changes nothing. Muted offers still reach the Angebote list and the dedup
+    table, so muting silences only the push. A mute goes when retention drops
+    its offer;
+  - both routes need the service token;
+  - the tap target is `NOTIFY_URL`, defaulting to `DASHBOARD_PATH`, so the
+    deploy can set the full URL of the Angebote tab;
+  - the unchanged-offer suppression stays: a run pushes nothing already pushed.
 - **No public connector (decision 7): "revisit on concrete need".** The
   service stays LAN-only; see "Future options".
 

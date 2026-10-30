@@ -16,6 +16,7 @@ class FakeHomeAssistant:
         self.lists = {watchlist_run.TODO_ENTITY_ID: watchlist, watchlist_run.ANGEBOTE_ENTITY_ID: []}
         self.description_updates: list[tuple[str, str, str | None]] = []
         self.pushes: list[str] = []
+        self.notifications: list[dict] = []
 
     def get_todo_items(self, entity_id):
         return [dict(item) for item in self.lists[entity_id]]
@@ -35,6 +36,7 @@ class FakeHomeAssistant:
 
     def notify(self, service, message, title=None, data=None):
         self.pushes.append(message)
+        self.notifications.append({"service": service, "title": title, "message": message, "data": data})
 
     def watchlist_description(self, uid):
         return next(i["description"] for i in self.lists[watchlist_run.TODO_ENTITY_ID] if i["uid"] == uid)
@@ -121,8 +123,12 @@ def test_all_stores_listed_current_first_and_future_offer_marked(env):
         "- Frischkaese Natur - 1.11 € bei Markt A, gueltig bis 2026-10-24\n"
         "- Frischkaese Natur - 0.99 € bei Markt C, gueltig ab 2026-10-26 bis 2026-10-31"
     )
-    # The future offer is still pushed, now with its start date.
-    assert ha_fake.pushes == ["3 neue(s) Angebot(e) gefunden, davon 1 ab 2026-10-26 - siehe Einkaufsliste."]
+    # The future offer is still pushed, after the current ones and with its start.
+    assert ha_fake.pushes == [
+        "Frischkaese Natur 1,11 € bei Markt A bis Sa\n"
+        "Frischkaese Natur 1,11 € bei Markt B bis Sa\n"
+        "Frischkaese Natur 0,99 € bei Markt C ab Mo bis Sa 31.10."
+    ]
 
 
 def test_every_fetched_offer_and_verdict_is_stored(env):
@@ -174,7 +180,7 @@ def test_llm_yes_is_pushed(env):
 
     watchlist_run.run()
 
-    assert ha_fake.pushes == ["1 neue(s) Angebot(e) gefunden - siehe Einkaufsliste."]
+    assert ha_fake.pushes == ["Frischkaesezubereitung 1,11 € bei Markt A bis Sa"]
 
 
 def test_second_run_neither_pushes_nor_rewrites(env):
@@ -283,3 +289,141 @@ def test_new_offer_extends_angebote_list_written_without_list_markers(env):
         "- Frischkaese Alt - 1.29 € bei Markt Z, gueltig bis 2026-10-24\n"
         "- Frischkaese Natur - 1.11 € bei Markt A, gueltig bis 2026-10-24"
     )
+
+
+# --- the actionable push ---
+
+
+def test_one_push_per_item_with_actions_for_its_cheapest_current_offer(env):
+    ha_fake = env([
+        {"uid": "w1", "summary": "Frischkaese", "description": None},
+        {"uid": "w2", "summary": "Quark", "description": None},
+        {"uid": "w3", "summary": "Tomaten", "description": None},
+    ])
+    env.marktguru.results["Frischkaese"] = [
+        frischkaese(1, "Markt B", 1.29),
+        frischkaese(2, "Markt A", 1.11, requiresLoyalityMembership=True),
+        frischkaese(3, "Markt C", 0.89, valid_from=date(2026, 10, 26), valid_to=date(2026, 10, 31)),
+    ]
+    env.marktguru.results["Quark"] = [
+        raw_offer(4, product="Quark Mager", retailer="Markt A", price=0.79, category="Quark",
+                  valid_from=date(2026, 10, 26), valid_to=date(2026, 10, 26)),
+        raw_offer(5, product="Quark Mager", retailer="Markt D", price=0.69, category="Quark",
+                  valid_from=date(2026, 10, 26), valid_to=date(2026, 11, 7)),
+    ]
+
+    watchlist_run.run()
+
+    assert ha_fake.notifications == [
+        {
+            "service": "test_device",
+            "title": "Angebot: Frischkaese",
+            "message": "Frischkaese Natur 1,11 € bei Markt A bis Sa (App-Preis)\n"
+                       "Frischkaese Natur 1,29 € bei Markt B bis Sa\n"
+                       "Frischkaese Natur 0,89 € bei Markt C ab Mo bis Sa 31.10.",
+            "data": {
+                "tag": "deal-scraper-Frischkaese",
+                "group": "deal-scraper",
+                "url": "/lovelace/deal-scraper",
+                "clickAction": "/lovelace/deal-scraper",
+                "actions": [
+                    {"action": "DEALS_ADD:marktguru:2", "title": "Auf Einkaufsliste"},
+                    {"action": "DEALS_MUTE:marktguru:2", "title": "Nicht mehr melden"},
+                ],
+            },
+        },
+        {
+            "service": "test_device",
+            "title": "Angebot: Quark",
+            # No current offer: the actions go to the cheapest upcoming one; an
+            # end beyond the coming week keeps its date.
+            "message": "Quark Mager 0,69 € bei Markt D ab Mo bis Sa 07.11.\n"
+                       "Quark Mager 0,79 € bei Markt A nur am Mo",
+            "data": {
+                "tag": "deal-scraper-Quark",
+                "group": "deal-scraper",
+                "url": "/lovelace/deal-scraper",
+                "clickAction": "/lovelace/deal-scraper",
+                "actions": [
+                    {"action": "DEALS_ADD:marktguru:5", "title": "Auf Einkaufsliste"},
+                    {"action": "DEALS_MUTE:marktguru:5", "title": "Nicht mehr melden"},
+                ],
+            },
+        },
+    ]
+
+
+def test_push_names_five_offers_and_counts_the_rest(env):
+    ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
+    env.marktguru.results["Frischkaese"] = [frischkaese(i, f"Markt {i}", 1.0 + i / 10) for i in range(1, 8)]
+
+    watchlist_run.run()
+
+    lines = ha_fake.pushes[0].split("\n")
+    assert lines[0] == "Frischkaese Natur 1,10 € bei Markt 1 bis Sa"
+    assert len(lines) == 6
+    assert lines[-1] == "und 2 weitere"
+
+
+def test_tap_target_is_configurable(env, monkeypatch):
+    monkeypatch.setattr(watchlist_run, "NOTIFY_URL", "https://ha.example/lovelace/angebote")
+    ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
+    env.marktguru.results["Frischkaese"] = [frischkaese(1, "Markt A", 1.11)]
+
+    watchlist_run.run()
+
+    data = ha_fake.notifications[0]["data"]
+    assert data["url"] == data["clickAction"] == "https://ha.example/lovelace/angebote"
+
+
+def test_muted_offers_are_not_pushed(env):
+    ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
+    env.marktguru.results["Frischkaese"] = [frischkaese(1, "Markt A", 1.11), frischkaese(2, "Markt B", 1.29)]
+    watchlist_run.run()
+    with store.open_store(env.db_path) as conn:
+        store.mute_offer(conn, "marktguru:1", NOW)
+    # Next week's flyer brings both offers again with a new validity window.
+    env.advance(days=4)
+    next_week = {"valid_from": date(2026, 10, 26), "valid_to": date(2026, 10, 31)}
+    env.marktguru.results["Frischkaese"] = [frischkaese(1, "Markt A", 1.11, **next_week),
+                                            frischkaese(2, "Markt B", 1.29, **next_week)]
+    ha_fake.notifications.clear()
+
+    watchlist_run.run()
+
+    assert [n["message"] for n in ha_fake.notifications] == ["Frischkaese Natur 1,29 € bei Markt B bis Sa"]
+    assert ha_fake.notifications[0]["data"]["actions"][0]["action"] == "DEALS_ADD:marktguru:2"
+
+
+def test_item_whose_new_offers_are_all_muted_gets_no_push(env):
+    ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
+    env.marktguru.results["Frischkaese"] = [frischkaese(1, "Markt A", 1.11)]
+    with store.open_store(env.db_path) as conn:
+        store.finish_fetch(conn, store.reserve_search(conn, "x", "00000", NOW, NOW, 99), NOW,
+                           [make_offer("1", title="Frischkaese Natur")], 1)
+        store.mute_offer(conn, "marktguru:1", NOW)
+
+    watchlist_run.run()
+
+    assert ha_fake.pushes == []
+    # Still recorded, so it is not offered for a push again either.
+    assert ha_fake.lists[watchlist_run.ANGEBOTE_ENTITY_ID][0]["summary"] == "Frischkaese"
+
+
+def test_a_failed_push_does_not_stop_the_others(env, monkeypatch):
+    ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None},
+                   {"uid": "w2", "summary": "Quark", "description": None}])
+    env.marktguru.results["Frischkaese"] = [frischkaese(1, "Markt A", 1.11)]
+    env.marktguru.results["Quark"] = [raw_offer(2, product="Quark Mager", retailer="Markt A", price=0.79, category="Quark")]
+    notify = ha_fake.notify
+
+    def flaky(service, message, title=None, data=None):
+        if title == "Angebot: Frischkaese":
+            raise requests.ConnectionError("down")
+        notify(service, message, title, data)
+
+    monkeypatch.setattr(ha, "notify", flaky)
+
+    assert watchlist_run.run() == 0
+
+    assert [n["title"] for n in ha_fake.notifications] == ["Angebot: Quark"]
