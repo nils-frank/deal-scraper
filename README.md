@@ -107,22 +107,23 @@ The watchlist run sends one notification per watchlist item that has new offers 
 that run, through `notify.<NOTIFY_SERVICE>`. Offers already pushed for that item are
 never pushed again. The title is `Angebot: <item>`, and the message names the item's
 new offers, current ones first, each group cheapest first, with price, chain and a
-short German validity span (at most five, then "und N weitere"). `▸` marks the offer
+German validity span (at most five, then "und N weitere"). `▸` marks the offer
 "Auf Einkaufsliste" puts on the list:
 
 ```
-▸ Philadelphia 1,11 € bei REWE bis Sa
-Philadelphia 1,29 € bei Lidl bis Sa (App-Preis)
-Philadelphia 0,99 € bei Aldi Süd ab Mo bis Sa 07.11.
+▸ Philadelphia 1,11 € bei REWE bis Samstag
+Philadelphia 1,29 € bei Lidl bis Samstag (App-Preis)
+Philadelphia 0,99 € bei Aldi Süd ab Montag bis 7. November
 ```
 
-Within the coming week a day is named by its weekday alone, later ones carry the date.
+Tomorrow reads "morgen", a later day within the coming week its weekday, any later day
+its date.
 `data` carries:
 
 | Key | Value |
 |---|---|
 | `actions` | `{"action": "DEALS_ADD:<offer_key>", "title": "Auf Einkaufsliste"}` for the item's cheapest current offer, or the cheapest upcoming one when none runs yet, and `{"action": "DEALS_UNWATCH:<item>", "title": "Von Watchlist entfernen"}` with the item exactly as it is on the watchlist |
-| `url`, `clickAction` | The tap target from `NOTIFY_URL` (default `DASHBOARD_PATH`, `/lovelace/deal-scraper`). Set a full URL when the Companion App does not navigate to the relative path |
+| `url`, `clickAction` | The tap target from `DASHBOARD_PATH` (default `/lovelace/deal-scraper`). Set a full URL when the Companion App does not navigate to the relative path |
 | `tag` | `deal-scraper-<item>`, so a later push for the same item replaces the earlier one |
 
 One Home Assistant automation on `mobile_app_notification_action` handles both

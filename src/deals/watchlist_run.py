@@ -22,10 +22,9 @@ log = logging.getLogger(__name__)
 
 TODO_ENTITY_ID = os.environ.get("TODO_ENTITY_ID", "todo.lebensmittel_prospekt_tracker")
 ANGEBOTE_ENTITY_ID = os.environ.get("ANGEBOTE_ENTITY_ID", "todo.aktuelle_angebote")
-DASHBOARD_PATH = os.environ.get("DASHBOARD_PATH", "/lovelace/deal-scraper")
 # Where tapping the push leads. A full URL ("https://<ha-host>/lovelace/...") rather
 # than the relative path works around the Companion App not navigating on tap.
-NOTIFY_URL = os.environ.get("NOTIFY_URL", DASHBOARD_PATH)
+DASHBOARD_PATH = os.environ.get("DASHBOARD_PATH", "/lovelace/deal-scraper")
 # Offers named in one push; the rest are counted.
 PUSH_OFFERS = 5
 # Leads the line of the offer "Auf Einkaufsliste" puts on the list.
@@ -56,14 +55,17 @@ def markdown_list(lines) -> str:
     return "\n".join(f"- {line}" for line in lines)
 
 
+def sort_offers(offers, today: date) -> list:
+    """Current offers first, then upcoming ones, each cheapest first."""
+    return sorted(offers, key=lambda o: (o.valid_from > today, o.price is None, o.price or 0.0, o.valid_from, o.retailer))
+
+
 def format_watchlist_description(offers, today: date) -> str | None:
     """One line per store for its cheapest offer valid today and one for its
     cheapest upcoming offer; current offers first, each group cheapest first.
     None when no offer is left, which clears the watchlist item's description."""
     cheapest = {}
-    for offer in sorted(
-        offers, key=lambda o: (o.valid_from > today, o.price is None, o.price or 0.0, o.valid_from, o.retailer)
-    ):
+    for offer in sort_offers(offers, today):
         cheapest.setdefault((offer.retailer, offer.valid_from > today), offer)
     if not cheapest:
         return None
@@ -77,17 +79,12 @@ def format_angebote_line(offer, today: date) -> str:
     return f"{offer.title} - {format_todo_description(offer, today)}"
 
 
-def push_order(offers, today: date) -> list:
-    """Current offers first, then upcoming ones, each cheapest first."""
-    return sorted(offers, key=lambda o: (o.valid_from > today, o.price is None, o.price or 0.0, o.valid_from, o.retailer))
-
-
 def build_push(item_summary: str, offers, today: date) -> dict:
     """The push for one watchlist item's new offers: one line per offer with its
     validity span. "Auf Einkaufsliste" acts on the first and marked line, the
     cheapest current offer or, when none runs yet, the cheapest upcoming one;
     "Von Watchlist entfernen" takes the item off the watchlist."""
-    ordered = push_order(offers, today)
+    ordered = sort_offers(offers, today)
     lines = [query.format_push_line(offer, today) for offer in ordered[:PUSH_OFFERS]]
     lines[0] = f"{ACTION_OFFER_MARK}{lines[0]}"
     if len(ordered) > PUSH_OFFERS:
@@ -99,8 +96,8 @@ def build_push(item_summary: str, offers, today: date) -> dict:
         "data": {
             # One notification per item, so a later push for it replaces this one.
             "tag": f"deal-scraper-{item_summary}",
-            "url": NOTIFY_URL,
-            "clickAction": NOTIFY_URL,
+            "url": DASHBOARD_PATH,
+            "clickAction": DASHBOARD_PATH,
             "actions": [
                 {"action": f"{ADD_ACTION}:{key}", "title": "Auf Einkaufsliste"},
                 {"action": f"{UNWATCH_ACTION}:{item_summary}", "title": "Von Watchlist entfernen"},
@@ -132,8 +129,8 @@ def run() -> int:
     notify_service = os.environ["NOTIFY_SERVICE"]
     db_path = os.environ.get("DB_PATH", store.DEFAULT_DB_PATH)
     log.info(
-        "Starting run: PLZ=%s TODO_ENTITY_ID=%s ANGEBOTE_ENTITY_ID=%s NOTIFY_SERVICE=%s DB_PATH=%s NOTIFY_URL=%s",
-        plz, TODO_ENTITY_ID, ANGEBOTE_ENTITY_ID, notify_service, db_path, NOTIFY_URL,
+        "Starting run: PLZ=%s TODO_ENTITY_ID=%s ANGEBOTE_ENTITY_ID=%s NOTIFY_SERVICE=%s DB_PATH=%s DASHBOARD_PATH=%s",
+        plz, TODO_ENTITY_ID, ANGEBOTE_ENTITY_ID, notify_service, db_path, DASHBOARD_PATH,
     )
     watchlist = ha.get_todo_items(TODO_ENTITY_ID)
     if not watchlist:

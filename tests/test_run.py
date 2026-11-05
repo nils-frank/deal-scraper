@@ -125,9 +125,9 @@ def test_all_stores_listed_current_first_and_future_offer_marked(env):
     )
     # The future offer is still pushed, after the current ones and with its start.
     assert ha_fake.pushes == [
-        "▸ Frischkaese Natur 1,11 € bei Markt A bis Sa\n"
-        "Frischkaese Natur 1,11 € bei Markt B bis Sa\n"
-        "Frischkaese Natur 0,99 € bei Markt C ab Mo bis Sa 31.10."
+        "▸ Frischkaese Natur 1,11 € bei Markt A bis Samstag\n"
+        "Frischkaese Natur 1,11 € bei Markt B bis Samstag\n"
+        "Frischkaese Natur 0,99 € bei Markt C ab Montag bis 31. Oktober"
     ]
 
 
@@ -180,7 +180,7 @@ def test_llm_yes_is_pushed(env):
 
     watchlist_run.run()
 
-    assert ha_fake.pushes == ["▸ Frischkaesezubereitung 1,11 € bei Markt A bis Sa"]
+    assert ha_fake.pushes == ["▸ Frischkaesezubereitung 1,11 € bei Markt A bis Samstag"]
 
 
 def test_second_run_neither_pushes_nor_rewrites(env):
@@ -318,9 +318,9 @@ def test_one_push_per_item_with_actions_for_its_cheapest_current_offer(env):
         {
             "service": "test_device",
             "title": "Angebot: Frischkaese",
-            "message": "▸ Frischkaese Natur 1,11 € bei Markt A bis Sa (App-Preis)\n"
-                       "Frischkaese Natur 1,29 € bei Markt B bis Sa\n"
-                       "Frischkaese Natur 0,89 € bei Markt C ab Mo bis Sa 31.10.",
+            "message": "▸ Frischkaese Natur 1,11 € bei Markt A bis Samstag (App-Preis)\n"
+                       "Frischkaese Natur 1,29 € bei Markt B bis Samstag\n"
+                       "Frischkaese Natur 0,89 € bei Markt C ab Montag bis 31. Oktober",
             "data": {
                 "tag": "deal-scraper-Frischkaese",
                 "url": "/lovelace/deal-scraper",
@@ -336,8 +336,8 @@ def test_one_push_per_item_with_actions_for_its_cheapest_current_offer(env):
             "title": "Angebot: Quark",
             # No current offer: the add action goes to the cheapest upcoming one; an
             # end beyond the coming week keeps its date.
-            "message": "▸ Quark Mager 0,69 € bei Markt D ab Mo bis Sa 07.11.\n"
-                       "Quark Mager 0,79 € bei Markt A nur am Mo",
+            "message": "▸ Quark Mager 0,69 € bei Markt D ab Montag bis 7. November\n"
+                       "Quark Mager 0,79 € bei Markt A nur am Montag",
             "data": {
                 "tag": "deal-scraper-Quark",
                 "url": "/lovelace/deal-scraper",
@@ -358,14 +358,14 @@ def test_push_names_five_offers_and_counts_the_rest(env):
     watchlist_run.run()
 
     lines = ha_fake.pushes[0].split("\n")
-    assert lines[0] == "▸ Frischkaese Natur 1,10 € bei Markt 1 bis Sa"
-    assert lines[1] == "Frischkaese Natur 1,20 € bei Markt 2 bis Sa"
+    assert lines[0] == "▸ Frischkaese Natur 1,10 € bei Markt 1 bis Samstag"
+    assert lines[1] == "Frischkaese Natur 1,20 € bei Markt 2 bis Samstag"
     assert len(lines) == 6
     assert lines[-1] == "und 2 weitere"
 
 
 def test_tap_target_is_configurable(env, monkeypatch):
-    monkeypatch.setattr(watchlist_run, "NOTIFY_URL", "https://ha.example/lovelace/angebote")
+    monkeypatch.setattr(watchlist_run, "DASHBOARD_PATH", "https://ha.example/lovelace/angebote")
     ha_fake = env([{"uid": "w1", "summary": "Frischkaese", "description": None}])
     env.marktguru.results["Frischkaese"] = [frischkaese(1, "Markt A", 1.11)]
 

@@ -68,7 +68,10 @@ class FakeHomeAssistant:
         if name == "todo/add_item":
             items.append({"uid": f"new{len(self.writes)}", "summary": json["item"], "status": "needs_action"})
         elif name == "todo/remove_item":
-            items[:] = [i for i in items if json["item"] not in (i["uid"], i["summary"])]
+            kept = [i for i in items if json["item"] not in (i["uid"], i["summary"])]
+            if len(kept) == len(items):
+                return FakeResponse(400, "")
+            items[:] = kept
         return FakeResponse(200, "[]")
 
     def summaries(self, entity):
@@ -415,7 +418,7 @@ def test_watchlist_add_and_remove(server, fake_ha):
     assert fake_ha.summaries(WATCHLIST) == ["Philadelphia Nature"]
     assert fake_ha.writes == [
         ("todo/add_item", {"entity_id": WATCHLIST, "item": "Philadelphia Nature"}),
-        ("todo/remove_item", {"entity_id": WATCHLIST, "item": "Butter"}),
+        ("todo/remove_item", {"entity_id": WATCHLIST, "item": "w1"}),
     ]
 
 
@@ -551,6 +554,26 @@ def test_api_watchlist_remove_answers_like_the_mcp_tool(server, fake_ha):
         return await client.call_tool("watchlist_remove", {"item": "Butter"})
 
     assert mcp(server)(steps).structured_content == {"removed": True, "item": "Butter", "list": WATCHLIST}
+
+
+def test_api_watchlist_remove_finds_an_item_stored_with_stray_spaces(server, fake_ha):
+    fake_ha.lists[WATCHLIST].append({"uid": "w2", "summary": "Quark ", "status": "needs_action"})
+
+    removed = post(server, "/api/watchlist/remove", {"item": "Quark"})
+
+    assert removed.status_code == 200
+    assert removed.json() == {"removed": True, "item": "Quark", "list": WATCHLIST}
+    assert fake_ha.summaries(WATCHLIST) == ["Butter"]
+
+
+def test_api_watchlist_remove_goes_by_summary_for_an_item_without_uid(server, fake_ha):
+    fake_ha.lists[WATCHLIST].append({"uid": None, "summary": "Quark", "status": "needs_action"})
+
+    removed = post(server, "/api/watchlist/remove", {"item": "Quark"})
+
+    assert removed.status_code == 200
+    assert fake_ha.writes == [("todo/remove_item", {"entity_id": WATCHLIST, "item": "Quark"})]
+    assert fake_ha.summaries(WATCHLIST) == ["Butter"]
 
 
 def test_api_watchlist_remove_errors(server, fake_ha):

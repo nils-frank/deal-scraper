@@ -20,7 +20,7 @@ live-updating dashboard view ("Angebote", `lovelace/deal-scraper`), and sends
 one push per watchlist item with new matches, instead of one per match. An offer that starts later shows "ab <date>" in
 the descriptions and the push. Phase 3 made that push actionable, see "Actionable
 push" below. See `OPERATIONS.md` for the current known issues with this
-(tap-to-navigate on the push not yet working; `NOTIFY_URL` takes the full URL
+(tap-to-navigate on the push not yet working; `DASHBOARD_PATH` takes the full URL
 that is the first check against it).
 
 ## Current design: a homelab deal service (architecture B)
@@ -145,8 +145,8 @@ One image, one console script `deals`:
   contract with that automation:
   - one notification per watchlist item that has new offers in a run, not one
     per offer. The message names the item's offers, cheapest current first,
-    each with price, chain and short German validity ("Philadelphia 1,11 € bei
-    REWE bis Sa"); upcoming ones read "ab Mo bis ...";
+    each with price, chain and German validity ("Philadelphia 1,11 € bei
+    REWE bis Samstag"); upcoming ones read "ab Montag bis ...";
   - action `DEALS_ADD:<offer_key>` ("Auf Einkaufsliste") for the item's
     cheapest current offer, or the cheapest upcoming one when none runs yet.
     A leading `▸` marks that offer's line, so the household sees which offer
@@ -163,8 +163,8 @@ One image, one console script `deals`:
     again anyway, and next week's flyer brings new offers for the same product,
     so a mute would have changed nothing the household could see;
   - both routes need the service token;
-  - the tap target is `NOTIFY_URL`, defaulting to `DASHBOARD_PATH`, so the
-    deploy can set the full URL of the Angebote tab;
+  - the tap target is `DASHBOARD_PATH`, a path or the full URL of the Angebote
+    tab;
   - the unchanged-offer suppression stays: a run pushes nothing already pushed.
 - **No public connector (decision 7): "revisit on concrete need".** The
   service stays LAN-only; see "Future options".

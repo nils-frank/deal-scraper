@@ -250,7 +250,7 @@ class DealService:
         if existing is None:
             names = ", ".join(i["summary"] for i in items) or "nothing"
             raise NotFound(f"{item!r} is not on the watchlist; it has {names}")
-        self._ha(ha.remove_todo_item, entity, existing["summary"])
+        self._ha(ha.remove_todo_item, entity, existing["uid"] or existing["summary"])
         return {"removed": True, "item": existing["summary"], "list": entity}
 
     def add_to_shopping_list(self, offer_key: str) -> dict:

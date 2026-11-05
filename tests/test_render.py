@@ -67,7 +67,7 @@ def test_watchlist_description_is_none_without_offers():
     assert watchlist_run.format_watchlist_description([], TODAY) is None
 
 
-def test_push_line_states_the_short_validity_span():
+def test_push_line_states_the_spoken_validity_span():
     lines = [
         watchlist_run.query.format_push_line(offer, TODAY)
         for offer in (
@@ -81,11 +81,11 @@ def test_push_line_states_the_short_validity_span():
         )
     ]
     assert lines == [
-        "Testmarke - Frischkaese 1,11 € bei Markt A bis Sa",
+        "Testmarke - Frischkaese 1,11 € bei Markt A bis Samstag",
         "Testmarke - Frischkaese 1,11 € bei Markt A bis heute",
-        "Testmarke - Frischkaese 1,11 € bei Markt A bis Sa (App-Preis)",
-        "Testmarke - Frischkaese bei Markt A bis Sa",
-        "Testmarke - Frischkaese 1,11 € bei Markt A ab Mo bis Mi",
-        "Testmarke - Frischkaese 1,11 € bei Markt A nur am Fr",
-        "Testmarke - Frischkaese 1,11 € bei Markt A bis Sa 07.11.",
+        "Testmarke - Frischkaese 1,11 € bei Markt A bis Samstag (App-Preis)",
+        "Testmarke - Frischkaese bei Markt A bis Samstag",
+        "Testmarke - Frischkaese 1,11 € bei Markt A ab Montag bis Mittwoch",
+        "Testmarke - Frischkaese 1,11 € bei Markt A nur morgen",
+        "Testmarke - Frischkaese 1,11 € bei Markt A bis 7. November",
     ]
