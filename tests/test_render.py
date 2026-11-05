@@ -67,17 +67,25 @@ def test_watchlist_description_is_none_without_offers():
     assert watchlist_run.format_watchlist_description([], TODAY) is None
 
 
-def test_push_message_for_current_offers():
-    assert watchlist_run.format_push_message([make_offer(), make_offer()], TODAY) == "2 neue(s) Angebot(e) gefunden - siehe Einkaufsliste."
-
-
-def test_push_message_names_future_start_dates():
-    offers = [
-        make_offer(),
-        make_offer(valid_from=date(2026, 11, 2), valid_to=date(2026, 11, 7)),
-        make_offer(**NEXT_WEEK),
-        make_offer(**NEXT_WEEK),
+def test_push_line_states_the_spoken_validity_span():
+    lines = [
+        watchlist_run.query.format_push_line(offer, TODAY)
+        for offer in (
+            make_offer(),
+            make_offer(valid_to=TODAY),
+            make_offer(app_only=True),
+            make_offer(price=None),
+            make_offer(valid_from=date(2026, 10, 26), valid_to=date(2026, 10, 28)),
+            make_offer(valid_from=date(2026, 10, 23), valid_to=date(2026, 10, 23)),
+            make_offer(valid_to=date(2026, 11, 7)),
+        )
     ]
-    assert watchlist_run.format_push_message(offers, TODAY) == (
-        "4 neue(s) Angebot(e) gefunden, davon 2 ab 2026-10-26, 1 ab 2026-11-02 - siehe Einkaufsliste."
-    )
+    assert lines == [
+        "Testmarke - Frischkaese 1,11 € bei Markt A bis Samstag",
+        "Testmarke - Frischkaese 1,11 € bei Markt A bis heute",
+        "Testmarke - Frischkaese 1,11 € bei Markt A bis Samstag (App-Preis)",
+        "Testmarke - Frischkaese bei Markt A bis Samstag",
+        "Testmarke - Frischkaese 1,11 € bei Markt A ab Montag bis Mittwoch",
+        "Testmarke - Frischkaese 1,11 € bei Markt A nur morgen",
+        "Testmarke - Frischkaese 1,11 € bei Markt A bis 7. November",
+    ]

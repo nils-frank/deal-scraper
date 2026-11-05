@@ -17,9 +17,11 @@ offers (per store one line for its cheapest offer valid today and one for its
 cheapest upcoming offer, current offers first, each group cheapest first,
 cleared once all of them have expired), pushes the full match list to a
 live-updating dashboard view ("Angebote", `lovelace/deal-scraper`), and sends
-**one** consolidated push per run instead of one per match. An offer that starts later shows "ab <date>" in
-the descriptions and the push. See `OPERATIONS.md` for the current known issues
-with this (tap-to-navigate on the push not yet working).
+one push per watchlist item with new matches, instead of one per match. An offer that starts later shows "ab <date>" in
+the descriptions and the push. Phase 3 made that push actionable, see "Actionable
+push" below. See `OPERATIONS.md` for the current known issues with this
+(tap-to-navigate on the push not yet working; `DASHBOARD_PATH` takes the full URL
+that is the first check against it).
 
 ## Current design: a homelab deal service (architecture B)
 
@@ -32,8 +34,8 @@ can show more than text. It is built in phases:
 | Phase | Scope | Status |
 |---|---|---|
 | 1. Core | `src/deals/` package; offer store v2 with an in-place migration; Marktguru client with key cache, query cache and a shared daily budget; query engine and `deals find`; category signal and verdict log in the batch run | Built |
-| 2. Service and agents | HTTP API, MCP server and `/healthz` in a long-running container from the same image, sharing the SQLite file; write tools for the watchlist and the shopping list; deploy config in the homelab repo | Service built (`deals serve`); deploy config and client setup pending |
-| 3. Home Assistant | REST sensor and an image card in the existing Angebote tab of the Overview dashboard, an Assist sentence, an actionable push | Planned |
+| 2. Service and agents | HTTP API, MCP server and `/healthz` in a long-running container from the same image, sharing the SQLite file; write tools for the watchlist and the shopping list; deploy config in the homelab repo | Built and live on `raspi4-02`; deploy config in the homelab repo |
+| 3. Home Assistant | REST sensor and an image card in the existing Angebote tab of the Overview dashboard, an Assist sentence, an actionable push | Push and its routes built in deal-scraper; Home Assistant config in the homelab repo |
 | 4. Refinement | MCP Apps cards in Claude Desktop, `price_history`, the keep-or-drop decision on the LLM tier | Planned |
 
 ### Layout
@@ -42,7 +44,8 @@ One image, one console script `deals`:
 
 - `deals run-watchlist` is the image's default command, so the systemd timer
   in `deploy/` runs it unchanged: twice weekly, `docker run --rm`, the local
-  LLM inside. It produces the same to-do updates and pushes as before.
+  LLM inside. It produces the same to-do updates as before, and the actionable
+  push described under "Binding decisions".
 - `deals find <query> [--when now|week|upcoming] [--json|--speech]` answers one
   question from the command line.
 - `deals serve [--host] [--port]` is the always-on deal service: the JSON API,
@@ -54,7 +57,7 @@ One image, one console script `deals`:
 |---|---|
 | `marktguru.py` | Marktguru client: normalization, key cache, query cache, budget, fallback |
 | `store.py` | SQLite store, schema migration, retention |
-| `query.py` | `when` filter, grouping, validity labels, text and speech renderings |
+| `query.py` | `when` filter, grouping, validity labels, text, speech and push renderings |
 | `match.py` | Category signal, then rapidfuzz |
 | `llm_escalate.py` | Local model for the uncertain middle, batch only |
 | `ha.py` | Home Assistant REST calls |
@@ -137,6 +140,33 @@ One image, one console script `deals`:
     the run records in `kv`. It never searches;
   - `/healthz` reports whether the store answers and the age of the last
     watchlist run, for the homelab's freshness alert.
+- **Actionable push (decision 9, 6h).** The push lists the actual offers
+  instead of "N neue Angebote - siehe Einkaufsliste", with two actions that one
+  Home Assistant automation on `mobile_app_notification_action` handles. The
+  contract with that automation:
+  - one notification per watchlist item that has new offers in a run, not one
+    per offer. The message names the item's offers, cheapest current first,
+    each with price, chain and German validity ("Philadelphia 1,11 € bei
+    REWE bis Samstag"); upcoming ones read "ab Montag bis ...";
+  - action `DEALS_ADD:<offer_key>` ("Auf Einkaufsliste") for the item's
+    cheapest current offer, or the cheapest upcoming one when none runs yet.
+    A leading `▸` marks that offer's line, so the household sees which offer
+    the button puts on the list;
+  - action `DEALS_UNWATCH:<item>` ("Von Watchlist entfernen"), with the item
+    exactly as it is on the watchlist. The automation splits every action at
+    the first `:`;
+  - `POST /api/shopping-list` with `{"offer_key": "..."}` behaves and answers
+    like the MCP tool `add_to_shopping_list` (decision 8: absolute label on
+    `todo.mealie_lebensmittel`, no duplicate entry);
+  - `POST /api/watchlist/remove` with `{"item": "..."}` behaves and answers
+    like the MCP tool `watchlist_remove`. This replaces the planned "Nicht mehr
+    melden" mute of a single offer: an offer already pushed is never pushed
+    again anyway, and next week's flyer brings new offers for the same product,
+    so a mute would have changed nothing the household could see;
+  - both routes need the service token;
+  - the tap target is `DASHBOARD_PATH`, a path or the full URL of the Angebote
+    tab;
+  - the unchanged-offer suppression stays: a run pushes nothing already pushed.
 - **No public connector (decision 7): "revisit on concrete need".** The
   service stays LAN-only; see "Future options".
 

@@ -92,14 +92,14 @@ def add_todo_item(entity_id: str, summary: str, description: str | None = None) 
     resp.raise_for_status()
 
 
-def remove_todo_item(entity_id: str, summary: str) -> None:
-    """POST todo/remove_item - removes an item from a to-do list by its summary
-    text (the local_todo integration resolves summary to uid internally)."""
-    log.info("POST %s/api/services/todo/remove_item entity_id=%s item=%r", _url(), entity_id, summary)
+def remove_todo_item(entity_id: str, item: str) -> None:
+    """POST todo/remove_item - removes an item from a to-do list by its uid or its
+    exact summary text (the summary as stored, before get_todo_items strips it)."""
+    log.info("POST %s/api/services/todo/remove_item entity_id=%s item=%r", _url(), entity_id, item)
     resp = requests.post(
         f"{_url()}/api/services/todo/remove_item",
         headers=_headers(),
-        json={"entity_id": entity_id, "item": summary},
+        json={"entity_id": entity_id, "item": item},
         timeout=REQUEST_TIMEOUT,
     )
     log.info("  -> %d: %s", resp.status_code, resp.text[:300])

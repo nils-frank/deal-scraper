@@ -207,7 +207,7 @@ def validity_span(offer: Offer, today: date, style: str) -> str:
     """The validity span in every output ("en" text, "de" JSON label, "spoken" German):
     an offer starting after today gives start and end, or only its day when it runs
     for one day; an offer that already runs gives its end.
-    E.g. "from Mon 26 Oct until Sat 31 Oct", "nur am Fr 23.10.", "bis heute"."""
+    E.g. "from Mon 26 Oct until Sat 31 Oct", "nur am Fr 23.10.", "bis heute", "ab Montag bis Samstag"."""
     day, span, single, until = _SPAN_WORDS[style]
     if offer.valid_from <= today:
         return until.format(end=day(offer.valid_to, today))
@@ -395,6 +395,14 @@ def format_speech(result: FindResult, now: datetime) -> str:
     if result.source == "store" and result.fetched_at is not None:
         sentences.append(f"Stand: {_age_de(result.fetched_at, now)}.")
     return " ".join(sentences)
+
+
+def format_push_line(offer: Offer, today: date) -> str:
+    """One offer in the watchlist push: "Philadelphia 1,11 € bei REWE bis Samstag",
+    "ab Montag bis Samstag" before it starts, with "App-Preis" when it needs the chain's app."""
+    price = f" {_euro_de(offer.price)}" if offer.price is not None else ""
+    app = " (App-Preis)" if offer.app_only else ""
+    return f"{offer.name}{price} bei {offer.retailer} {validity_span(offer, today, 'spoken')}{app}"
 
 
 def format_shopping_item(offer: Offer, today: date) -> str:

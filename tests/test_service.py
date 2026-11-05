@@ -68,7 +68,10 @@ class FakeHomeAssistant:
         if name == "todo/add_item":
             items.append({"uid": f"new{len(self.writes)}", "summary": json["item"], "status": "needs_action"})
         elif name == "todo/remove_item":
-            items[:] = [i for i in items if json["item"] not in (i["uid"], i["summary"])]
+            kept = [i for i in items if json["item"] not in (i["uid"], i["summary"])]
+            if len(kept) == len(items):
+                return FakeResponse(400, "")
+            items[:] = kept
         return FakeResponse(200, "[]")
 
     def summaries(self, entity):
@@ -415,7 +418,7 @@ def test_watchlist_add_and_remove(server, fake_ha):
     assert fake_ha.summaries(WATCHLIST) == ["Philadelphia Nature"]
     assert fake_ha.writes == [
         ("todo/add_item", {"entity_id": WATCHLIST, "item": "Philadelphia Nature"}),
-        ("todo/remove_item", {"entity_id": WATCHLIST, "item": "Butter"}),
+        ("todo/remove_item", {"entity_id": WATCHLIST, "item": "w1"}),
     ]
 
 
@@ -480,6 +483,130 @@ def test_write_tools_report_home_assistant_failures(deals, fake_ha):
     fake_ha.status = 500
     with pytest.raises(service.UpstreamError, match=r"Home Assistant did not answer \(HTTP 500\)"):
         deals.watchlist_add("Quark")
+
+
+# --- push actions: POST /api/shopping-list and /api/watchlist/remove ---
+
+
+def post(server, path, body, headers=AUTH):
+    return requests.post(f"{server}{path}", json=body, headers=headers, timeout=10)
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}])
+@pytest.mark.parametrize("path, body", [("/api/shopping-list", {"offer_key": "marktguru:1"}),
+                                        ("/api/watchlist/remove", {"item": "Butter"})])
+def test_push_actions_need_the_token(server, deals, fake_ha, path, body, headers):
+    get(server, "/api/find", q="Butter")
+    response = post(server, path, body, headers=headers)
+    assert response.status_code == 401
+    assert fake_ha.writes == []
+
+
+def test_api_shopping_list_answers_like_the_mcp_tool(server, deals, fake_ha):
+    get(server, "/api/find", q="Butter")
+    first = post(server, "/api/shopping-list", {"offer_key": "marktguru:2"})
+    twice = post(server, "/api/shopping-list", {"offer_key": "marktguru:2"})
+
+    assert first.status_code == 200
+    assert first.json() == {
+        "added": True,
+        "item": "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 24.10., App-Preis)",
+        "list": SHOPPING,
+        "offer": first.json()["offer"],
+    }
+    assert first.json()["offer"]["offer_key"] == "marktguru:2"
+    assert first.json()["offer"]["validity"] == "bis Sa 24.10."
+    assert twice.status_code == 200
+    assert twice.json()["added"] is False
+    assert twice.json()["reason"] == "already on the shopping list"
+    assert fake_ha.summaries(SHOPPING) == ["Milch", "Bergwiese Feine Butter 1,29 € (Markt C, bis Sa 24.10., App-Preis)"]
+
+    async def steps(client):
+        return await client.call_tool("add_to_shopping_list", {"offer_key": "marktguru:2"})
+
+    assert mcp(server)(steps).structured_content == twice.json()
+
+
+def test_api_shopping_list_errors(server, deals, fake_ha):
+    get(server, "/api/find", q="Butter")
+    unknown = post(server, "/api/shopping-list", {"offer_key": "marktguru:999"})
+    ended = post(server, "/api/shopping-list", {"offer_key": "marktguru:5"})
+    assert unknown.status_code == 404
+    assert "no stored offer 'marktguru:999'" in unknown.json()["error"]
+    assert ended.status_code == 400
+    assert "ended on 2026-10-17" in ended.json()["error"]
+    fake_ha.status = 500
+    failing = post(server, "/api/shopping-list", {"offer_key": "marktguru:1"})
+    assert failing.status_code == 502
+    assert fake_ha.summaries(SHOPPING) == ["Milch"]
+
+
+def test_api_watchlist_remove_answers_like_the_mcp_tool(server, fake_ha):
+    fake_ha.lists[WATCHLIST].append({"uid": "w2", "summary": "Bio: Quark", "status": "needs_action"})
+
+    removed = post(server, "/api/watchlist/remove", {"item": "Bio: Quark"})
+
+    assert removed.status_code == 200
+    assert removed.json() == {"removed": True, "item": "Bio: Quark", "list": WATCHLIST}
+    assert fake_ha.summaries(WATCHLIST) == ["Butter"]
+
+    async def steps(client):
+        return await client.call_tool("watchlist_remove", {"item": "Butter"})
+
+    assert mcp(server)(steps).structured_content == {"removed": True, "item": "Butter", "list": WATCHLIST}
+
+
+def test_api_watchlist_remove_finds_an_item_stored_with_stray_spaces(server, fake_ha):
+    fake_ha.lists[WATCHLIST].append({"uid": "w2", "summary": "Quark ", "status": "needs_action"})
+
+    removed = post(server, "/api/watchlist/remove", {"item": "Quark"})
+
+    assert removed.status_code == 200
+    assert removed.json() == {"removed": True, "item": "Quark", "list": WATCHLIST}
+    assert fake_ha.summaries(WATCHLIST) == ["Butter"]
+
+
+def test_api_watchlist_remove_goes_by_summary_for_an_item_without_uid(server, fake_ha):
+    fake_ha.lists[WATCHLIST].append({"uid": None, "summary": "Quark", "status": "needs_action"})
+
+    removed = post(server, "/api/watchlist/remove", {"item": "Quark"})
+
+    assert removed.status_code == 200
+    assert fake_ha.writes == [("todo/remove_item", {"entity_id": WATCHLIST, "item": "Quark"})]
+    assert fake_ha.summaries(WATCHLIST) == ["Butter"]
+
+
+def test_api_watchlist_remove_errors(server, fake_ha):
+    missing = post(server, "/api/watchlist/remove", {"item": "Quark"})
+    assert missing.status_code == 404
+    assert "'Quark' is not on the watchlist; it has Butter" in missing.json()["error"]
+    fake_ha.status = 500
+    failing = post(server, "/api/watchlist/remove", {"item": "Butter"})
+    assert failing.status_code == 502
+    assert fake_ha.summaries(WATCHLIST) == ["Butter"]
+
+
+@pytest.mark.parametrize("path, field", [("/api/shopping-list", "offer_key"), ("/api/watchlist/remove", "item")])
+@pytest.mark.parametrize("body", [[], {}, "text", {"VALUE": ""}, {"VALUE": "  "}, {"VALUE": 1}, {"other": "text"}])
+def test_push_actions_reject_bad_bodies(server, fake_ha, path, field, body):
+    if isinstance(body, dict) and "VALUE" in body:
+        body = {field: body["VALUE"]}
+    response = post(server, path, body)
+    assert response.status_code == 400
+    assert response.json() == {"error": f'the body must be {{"{field}": "..."}}'}
+    assert fake_ha.writes == []
+
+
+@pytest.mark.parametrize("path", ["/api/shopping-list", "/api/watchlist/remove"])
+def test_push_actions_reject_a_body_that_is_not_json(server, path):
+    response = requests.post(f"{server}{path}", data="offer_key=marktguru:1", headers=AUTH, timeout=10)
+    assert response.status_code == 400
+    assert response.json() == {"error": "the body must be JSON"}
+
+
+@pytest.mark.parametrize("path", ["/api/shopping-list", "/api/watchlist/remove"])
+def test_push_actions_are_post_only(server, path):
+    assert get(server, path).status_code == 405
 
 
 # --- configuration ---

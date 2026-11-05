@@ -3,6 +3,8 @@
 - GET /api/find?q=&when=&stores=&limit=  the find_offers answer, with the German speech text
 - GET /api/watchlist?when=               the watchlist_deals answer
 - GET /api/status                        the deals://status answer
+- POST /api/shopping-list {"offer_key"}  the add_to_shopping_list answer, for the push action
+- POST /api/watchlist/remove {"item"}    the watchlist_remove answer, for the push action
 - /mcp                                   the MCP server (`mcp_server.py`)
 - GET /healthz                           store reachability and the age of the last watchlist run
 
@@ -18,6 +20,7 @@ import sys
 import uvicorn
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.middleware import Middleware
 from starlette.requests import Request
@@ -70,6 +73,18 @@ def _limit(request: Request) -> int:
         raise InvalidRequest("limit must be a number") from None
 
 
+async def _body_field(request: Request, field: str) -> str:
+    """The non-empty string `field` of a JSON body {field: "..."}."""
+    try:
+        body = await request.json()
+    except ValueError:
+        raise InvalidRequest("the body must be JSON") from None
+    value = body.get(field) if isinstance(body, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequest(f'the body must be {{"{field}": "..."}}')
+    return value
+
+
 def create_app(service: DealService) -> Starlette:
     mcp_app = mcp_server.build_server(service).streamable_http_app(
         streamable_http_path="/mcp",
@@ -93,6 +108,17 @@ def create_app(service: DealService) -> Starlette:
     def status(request: Request) -> JSONResponse:
         return _answer(service.status)
 
+    def push_action(call, field):
+        # Reading the body is async; the store and Home Assistant calls block.
+        async def endpoint(request: Request) -> JSONResponse:
+            try:
+                value = await _body_field(request, field)
+            except InvalidRequest as exc:
+                return JSONResponse({"error": str(exc)}, status_code=exc.status)
+            return await run_in_threadpool(_answer, call, value)
+
+        return endpoint
+
     def healthz(request: Request) -> JSONResponse:
         ok, body = service.health()
         return JSONResponse(body, status_code=200 if ok else 503)
@@ -103,6 +129,8 @@ def create_app(service: DealService) -> Starlette:
             Route("/api/find", find),
             Route("/api/watchlist", watchlist),
             Route("/api/status", status),
+            Route("/api/shopping-list", push_action(service.add_to_shopping_list, "offer_key"), methods=["POST"]),
+            Route("/api/watchlist/remove", push_action(service.watchlist_remove, "item"), methods=["POST"]),
             *mcp_app.routes,
         ],
         middleware=[Middleware(BearerAuth, token=service.settings.token)],
