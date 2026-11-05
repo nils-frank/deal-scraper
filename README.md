@@ -99,7 +99,8 @@ curl -H "Authorization: Bearer $DEAL_SERVICE_TOKEN" "http://localhost:8000/api/f
 ```
 
 An unknown `offer_key` or an item not on the watchlist answers 404, a body without the
-non-empty string answers 400, and a Home Assistant failure answers 502.
+non-empty string or an offer that has already ended answers 400, and a Home Assistant
+failure answers 502.
 
 ### The push
 
@@ -116,8 +117,9 @@ Philadelphia 1,29 € bei Lidl bis Samstag (App-Preis)
 Philadelphia 0,99 € bei Aldi Süd ab Montag bis 7. November
 ```
 
-Tomorrow reads "morgen", a later day within the coming week its weekday, any later day
-its date.
+Today reads "heute", tomorrow "morgen", a later day within the coming week its weekday,
+any later day its date.
+
 `data` carries:
 
 | Key | Value |

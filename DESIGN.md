@@ -34,7 +34,7 @@ can show more than text. It is built in phases:
 | Phase | Scope | Status |
 |---|---|---|
 | 1. Core | `src/deals/` package; offer store v2 with an in-place migration; Marktguru client with key cache, query cache and a shared daily budget; query engine and `deals find`; category signal and verdict log in the batch run | Built |
-| 2. Service and agents | HTTP API, MCP server and `/healthz` in a long-running container from the same image, sharing the SQLite file; write tools for the watchlist and the shopping list; deploy config in the homelab repo | Service built (`deals serve`); deploy config and client setup pending |
+| 2. Service and agents | HTTP API, MCP server and `/healthz` in a long-running container from the same image, sharing the SQLite file; write tools for the watchlist and the shopping list; deploy config in the homelab repo | Built and live on `raspi4-02`; deploy config in the homelab repo |
 | 3. Home Assistant | REST sensor and an image card in the existing Angebote tab of the Overview dashboard, an Assist sentence, an actionable push | Push and its routes built in deal-scraper; Home Assistant config in the homelab repo |
 | 4. Refinement | MCP Apps cards in Claude Desktop, `price_history`, the keep-or-drop decision on the LLM tier | Planned |
 
@@ -44,7 +44,8 @@ One image, one console script `deals`:
 
 - `deals run-watchlist` is the image's default command, so the systemd timer
   in `deploy/` runs it unchanged: twice weekly, `docker run --rm`, the local
-  LLM inside. It produces the same to-do updates and pushes as before.
+  LLM inside. It produces the same to-do updates as before, and the actionable
+  push described under "Binding decisions".
 - `deals find <query> [--when now|week|upcoming] [--json|--speech]` answers one
   question from the command line.
 - `deals serve [--host] [--port]` is the always-on deal service: the JSON API,
@@ -56,7 +57,7 @@ One image, one console script `deals`:
 |---|---|
 | `marktguru.py` | Marktguru client: normalization, key cache, query cache, budget, fallback |
 | `store.py` | SQLite store, schema migration, retention |
-| `query.py` | `when` filter, grouping, validity labels, text and speech renderings |
+| `query.py` | `when` filter, grouping, validity labels, text, speech and push renderings |
 | `match.py` | Category signal, then rapidfuzz |
 | `llm_escalate.py` | Local model for the uncertain middle, batch only |
 | `ha.py` | Home Assistant REST calls |
