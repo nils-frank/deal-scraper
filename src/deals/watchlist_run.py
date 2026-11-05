@@ -28,10 +28,13 @@ DASHBOARD_PATH = os.environ.get("DASHBOARD_PATH", "/lovelace/deal-scraper")
 NOTIFY_URL = os.environ.get("NOTIFY_URL", DASHBOARD_PATH)
 # Offers named in one push; the rest are counted.
 PUSH_OFFERS = 5
+# Leads the line of the offer "Auf Einkaufsliste" puts on the list.
+ACTION_OFFER_MARK = "▸ "
 # Action IDs of the push buttons, handled by a Home Assistant automation on
-# mobile_app_notification_action that calls POST /api/shopping-list or /api/mute.
+# mobile_app_notification_action that calls POST /api/shopping-list or
+# /api/watchlist/remove.
 ADD_ACTION = "DEALS_ADD"
-MUTE_ACTION = "DEALS_MUTE"
+UNWATCH_ACTION = "DEALS_UNWATCH"
 
 
 def format_validity(offer, today: date) -> str:
@@ -81,10 +84,12 @@ def push_order(offers, today: date) -> list:
 
 def build_push(item_summary: str, offers, today: date) -> dict:
     """The push for one watchlist item's new offers: one line per offer with its
-    validity span, and the two actions for the first of them, the cheapest
-    current offer or, when none runs yet, the cheapest upcoming one."""
+    validity span. "Auf Einkaufsliste" acts on the first and marked line, the
+    cheapest current offer or, when none runs yet, the cheapest upcoming one;
+    "Von Watchlist entfernen" takes the item off the watchlist."""
     ordered = push_order(offers, today)
     lines = [query.format_push_line(offer, today) for offer in ordered[:PUSH_OFFERS]]
+    lines[0] = f"{ACTION_OFFER_MARK}{lines[0]}"
     if len(ordered) > PUSH_OFFERS:
         lines.append(f"und {len(ordered) - PUSH_OFFERS} weitere")
     key = ordered[0].offer_id
@@ -94,12 +99,11 @@ def build_push(item_summary: str, offers, today: date) -> dict:
         "data": {
             # One notification per item, so a later push for it replaces this one.
             "tag": f"deal-scraper-{item_summary}",
-            "group": "deal-scraper",
             "url": NOTIFY_URL,
             "clickAction": NOTIFY_URL,
             "actions": [
                 {"action": f"{ADD_ACTION}:{key}", "title": "Auf Einkaufsliste"},
-                {"action": f"{MUTE_ACTION}:{key}", "title": "Nicht mehr melden"},
+                {"action": f"{UNWATCH_ACTION}:{item_summary}", "title": "Von Watchlist entfernen"},
             ],
         },
     }
@@ -217,17 +221,11 @@ def run() -> int:
                 )
                 continue
 
-            to_push = []
             for score, offer in new_offers:
                 store.record_notified(conn, offer, item_summary, item_summary)
                 notified_offers.append(offer)
                 log.info("  NEW MATCH (score=%.0f): %s bei %s", score, offer.title, offer.retailer)
-                if store.is_muted(conn, offer.offer_id):
-                    log.info("  MUTED: %r is not pushed", offer.title)
-                else:
-                    to_push.append(offer)
-            if to_push:
-                pushes.append(build_push(item_summary, to_push, today))
+            pushes.append(build_push(item_summary, [offer for _, offer in new_offers], today))
 
         sync_watchlist_descriptions(conn, watchlist, today)
         store.record_watchlist_run(conn, utcnow(), [i["summary"] for i in watchlist], len(notified_offers))

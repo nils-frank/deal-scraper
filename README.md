@@ -80,7 +80,7 @@ See `deploy/` for an example systemd service + timer pair to run it twice weekly
 | `GET /api/watchlist?when=week` | The `watchlist_deals` answer, for a Home Assistant REST sensor |
 | `GET /api/status` | The `deals://status` answer |
 | `POST /api/shopping-list` with `{"offer_key": "..."}` | Puts the offer on the shopping list: the same behavior and answer as the MCP tool `add_to_shopping_list` |
-| `POST /api/mute` with `{"offer_key": "..."}` | Mutes the offer: the watchlist run never pushes it again. Muting twice changes nothing; the answer is `{"muted": true, "already_muted": ..., "offer": {...}}` |
+| `POST /api/watchlist/remove` with `{"item": "..."}` | Takes the item off the watchlist: the same behavior and answer as the MCP tool `watchlist_remove` |
 | `/mcp` | The MCP server, Streamable HTTP (stateless, JSON responses) |
 | `GET /healthz` | Whether the store answers, and the age of the last watchlist run. Open, no token |
 
@@ -98,20 +98,20 @@ curl http://localhost:8000/healthz
 curl -H "Authorization: Bearer $DEAL_SERVICE_TOKEN" "http://localhost:8000/api/find?q=Butter"
 ```
 
-An unknown `offer_key` answers 404, a body without a non-empty string `offer_key`
-answers 400, and a Home Assistant failure on the shopping list answers 502.
+An unknown `offer_key` or an item not on the watchlist answers 404, a body without the
+non-empty string answers 400, and a Home Assistant failure answers 502.
 
 ### The push
 
 The watchlist run sends one notification per watchlist item that has new offers in
 that run, through `notify.<NOTIFY_SERVICE>`. Offers already pushed for that item are
-never pushed again, and muted offers are left out; an item whose new offers are all
-muted gets no push. The title is `Angebot: <item>`, and the message names the item's
+never pushed again. The title is `Angebot: <item>`, and the message names the item's
 new offers, current ones first, each group cheapest first, with price, chain and a
-short German validity span (at most five, then "und N weitere"):
+short German validity span (at most five, then "und N weitere"). `▸` marks the offer
+"Auf Einkaufsliste" puts on the list:
 
 ```
-Philadelphia 1,11 € bei REWE bis Sa
+▸ Philadelphia 1,11 € bei REWE bis Sa
 Philadelphia 1,29 € bei Lidl bis Sa (App-Preis)
 Philadelphia 0,99 € bei Aldi Süd ab Mo bis Sa 07.11.
 ```
@@ -121,14 +121,14 @@ Within the coming week a day is named by its weekday alone, later ones carry the
 
 | Key | Value |
 |---|---|
-| `actions` | `{"action": "DEALS_ADD:<offer_key>", "title": "Auf Einkaufsliste"}` and `{"action": "DEALS_MUTE:<offer_key>", "title": "Nicht mehr melden"}`, both for the item's cheapest current offer, or the cheapest upcoming one when none runs yet |
+| `actions` | `{"action": "DEALS_ADD:<offer_key>", "title": "Auf Einkaufsliste"}` for the item's cheapest current offer, or the cheapest upcoming one when none runs yet, and `{"action": "DEALS_UNWATCH:<item>", "title": "Von Watchlist entfernen"}` with the item exactly as it is on the watchlist |
 | `url`, `clickAction` | The tap target from `NOTIFY_URL` (default `DASHBOARD_PATH`, `/lovelace/deal-scraper`). Set a full URL when the Companion App does not navigate to the relative path |
 | `tag` | `deal-scraper-<item>`, so a later push for the same item replaces the earlier one |
-| `group` | `deal-scraper` |
 
 One Home Assistant automation on `mobile_app_notification_action` handles both
 actions: it splits the action at the first `:` and calls `POST /api/shopping-list`
-or `POST /api/mute` with the rest as `offer_key` and the service token.
+with the rest as `offer_key`, or `POST /api/watchlist/remove` with the rest as `item`,
+with the service token. Offer keys and items may contain `:` themselves.
 
 ### MCP tools
 

@@ -71,8 +71,7 @@ One image, one console script `deals`:
 - **Store (decision 3): SQLite on `raspi4-02` local disk.** Tables `offers`
   (every fetched offer, upserted on each fetch), `fetches` plus `fetch_offers`
   (one row per live search and the offers it returned), `matches` (every
-  watchlist verdict), the unchanged `notified_offers` dedup table,
-  `muted_offers` (offers never pushed again, see "Actionable push"), and `kv`
+  watchlist verdict), the unchanged `notified_offers` dedup table, and `kv`
   for the cached Marktguru keys. WAL mode and a busy timeout let a second
   process share the file; multi-statement writes take the lock up front.
   Opening a v1 database migrates it in place (`PRAGMA user_version` 2). v1
@@ -148,17 +147,21 @@ One image, one console script `deals`:
     per offer. The message names the item's offers, cheapest current first,
     each with price, chain and short German validity ("Philadelphia 1,11 € bei
     REWE bis Sa"); upcoming ones read "ab Mo bis ...";
-  - actions `DEALS_ADD:<offer_key>` ("Auf Einkaufsliste") and
-    `DEALS_MUTE:<offer_key>` ("Nicht mehr melden"), both for the item's
-    cheapest current offer, or the cheapest upcoming one when none runs yet;
+  - action `DEALS_ADD:<offer_key>` ("Auf Einkaufsliste") for the item's
+    cheapest current offer, or the cheapest upcoming one when none runs yet.
+    A leading `▸` marks that offer's line, so the household sees which offer
+    the button puts on the list;
+  - action `DEALS_UNWATCH:<item>` ("Von Watchlist entfernen"), with the item
+    exactly as it is on the watchlist. The automation splits every action at
+    the first `:`;
   - `POST /api/shopping-list` with `{"offer_key": "..."}` behaves and answers
     like the MCP tool `add_to_shopping_list` (decision 8: absolute label on
     `todo.mealie_lebensmittel`, no duplicate entry);
-  - `POST /api/mute` with `{"offer_key": "..."}` records the offer in
-    `muted_offers`, and the watchlist run never pushes it again; muting twice
-    changes nothing. Muted offers still reach the Angebote list and the dedup
-    table, so muting silences only the push. A mute goes when retention drops
-    its offer;
+  - `POST /api/watchlist/remove` with `{"item": "..."}` behaves and answers
+    like the MCP tool `watchlist_remove`. This replaces the planned "Nicht mehr
+    melden" mute of a single offer: an offer already pushed is never pushed
+    again anyway, and next week's flyer brings new offers for the same product,
+    so a mute would have changed nothing the household could see;
   - both routes need the service token;
   - the tap target is `NOTIFY_URL`, defaulting to `DASHBOARD_PATH`, so the
     deploy can set the full URL of the Angebote tab;

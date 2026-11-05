@@ -179,32 +179,3 @@ def test_kv_round_trip(conn):
     store.set_kv(conn, "k", "v1", NOW)
     store.set_kv(conn, "k", "v2", NOW + timedelta(hours=1))
     assert store.get_kv(conn, "k") == ("v2", datetime.fromisoformat(store.to_iso(NOW + timedelta(hours=1))))
-
-
-def _stored(conn, offer):
-    fetch_id = store.reserve_search(conn, "frischkaese", "00000", NOW, NOW - timedelta(hours=1), 30)
-    store.finish_fetch(conn, fetch_id, NOW, [offer], 1)
-
-
-def test_mute_offer_is_idempotent(conn):
-    _stored(conn, make_offer())
-    assert not store.is_muted(conn, "marktguru:1")
-    assert store.mute_offer(conn, "marktguru:1", NOW) is True
-    assert store.mute_offer(conn, "marktguru:1", NOW) is False
-    assert store.is_muted(conn, "marktguru:1")
-
-
-def test_mute_goes_with_its_offer(conn):
-    _stored(conn, make_offer(valid_from=date(2025, 10, 1), valid_to=date(2025, 10, 4)))
-    store.mute_offer(conn, "marktguru:1", NOW)
-    store.prune(conn, NOW)
-    assert not store.is_muted(conn, "marktguru:1")
-    assert conn.execute("SELECT COUNT(*) FROM muted_offers").fetchone()[0] == 0
-
-
-def test_existing_v2_store_gains_the_muted_table(db_path):
-    with store.open_store(db_path) as conn:
-        conn.execute("DROP TABLE muted_offers")
-    with store.open_store(db_path) as conn:
-        _stored(conn, make_offer())
-        assert store.mute_offer(conn, "marktguru:1", NOW)

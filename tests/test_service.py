@@ -482,7 +482,7 @@ def test_write_tools_report_home_assistant_failures(deals, fake_ha):
         deals.watchlist_add("Quark")
 
 
-# --- push actions: POST /api/shopping-list and /api/mute ---
+# --- push actions: POST /api/shopping-list and /api/watchlist/remove ---
 
 
 def post(server, path, body, headers=AUTH):
@@ -490,14 +490,13 @@ def post(server, path, body, headers=AUTH):
 
 
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}])
-@pytest.mark.parametrize("path", ["/api/shopping-list", "/api/mute"])
-def test_push_actions_need_the_token(server, deals, fake_ha, path, headers):
+@pytest.mark.parametrize("path, body", [("/api/shopping-list", {"offer_key": "marktguru:1"}),
+                                        ("/api/watchlist/remove", {"item": "Butter"})])
+def test_push_actions_need_the_token(server, deals, fake_ha, path, body, headers):
     get(server, "/api/find", q="Butter")
-    response = post(server, path, {"offer_key": "marktguru:1"}, headers=headers)
+    response = post(server, path, body, headers=headers)
     assert response.status_code == 401
     assert fake_ha.writes == []
-    with store.open_store(deals.settings.db_path) as conn:
-        assert not store.is_muted(conn, "marktguru:1")
 
 
 def test_api_shopping_list_answers_like_the_mcp_tool(server, deals, fake_ha):
@@ -539,48 +538,52 @@ def test_api_shopping_list_errors(server, deals, fake_ha):
     assert fake_ha.summaries(SHOPPING) == ["Milch"]
 
 
-def test_api_mute_is_idempotent(server, deals, fake_ha):
-    get(server, "/api/find", q="Butter")
-    first = post(server, "/api/mute", {"offer_key": "marktguru:1"})
-    twice = post(server, "/api/mute", {"offer_key": "marktguru:1"})
+def test_api_watchlist_remove_answers_like_the_mcp_tool(server, fake_ha):
+    fake_ha.lists[WATCHLIST].append({"uid": "w2", "summary": "Bio: Quark", "status": "needs_action"})
 
-    assert first.status_code == twice.status_code == 200
-    assert first.json()["muted"] is True and first.json()["already_muted"] is False
-    assert twice.json()["muted"] is True and twice.json()["already_muted"] is True
-    assert first.json()["offer"]["offer_key"] == "marktguru:1"
-    assert first.json()["offer"]["validity"] == "bis Sa 24.10."
-    with store.open_store(deals.settings.db_path) as conn:
-        assert store.is_muted(conn, "marktguru:1")
-        assert not store.is_muted(conn, "marktguru:2")
-        assert conn.execute("SELECT COUNT(*) FROM muted_offers").fetchone()[0] == 1
-    # Muting touches no Home Assistant list.
+    removed = post(server, "/api/watchlist/remove", {"item": "Bio: Quark"})
+
+    assert removed.status_code == 200
+    assert removed.json() == {"removed": True, "item": "Bio: Quark", "list": WATCHLIST}
+    assert fake_ha.summaries(WATCHLIST) == ["Butter"]
+
+    async def steps(client):
+        return await client.call_tool("watchlist_remove", {"item": "Butter"})
+
+    assert mcp(server)(steps).structured_content == {"removed": True, "item": "Butter", "list": WATCHLIST}
+
+
+def test_api_watchlist_remove_errors(server, fake_ha):
+    missing = post(server, "/api/watchlist/remove", {"item": "Quark"})
+    assert missing.status_code == 404
+    assert "'Quark' is not on the watchlist; it has Butter" in missing.json()["error"]
+    fake_ha.status = 500
+    failing = post(server, "/api/watchlist/remove", {"item": "Butter"})
+    assert failing.status_code == 502
+    assert fake_ha.summaries(WATCHLIST) == ["Butter"]
+
+
+@pytest.mark.parametrize("path, field", [("/api/shopping-list", "offer_key"), ("/api/watchlist/remove", "item")])
+@pytest.mark.parametrize("body", [[], {}, "text", {"VALUE": ""}, {"VALUE": "  "}, {"VALUE": 1}, {"other": "text"}])
+def test_push_actions_reject_bad_bodies(server, fake_ha, path, field, body):
+    if isinstance(body, dict) and "VALUE" in body:
+        body = {field: body["VALUE"]}
+    response = post(server, path, body)
+    assert response.status_code == 400
+    assert response.json() == {"error": f'the body must be {{"{field}": "..."}}'}
     assert fake_ha.writes == []
 
 
-def test_api_mute_unknown_offer(server, deals):
-    response = post(server, "/api/mute", {"offer_key": "marktguru:999"})
-    assert response.status_code == 404
-    assert "no stored offer 'marktguru:999'" in response.json()["error"]
-    with store.open_store(deals.settings.db_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM muted_offers").fetchone()[0] == 0
-
-
-@pytest.mark.parametrize("path", ["/api/shopping-list", "/api/mute"])
-@pytest.mark.parametrize("body", [[], {}, "marktguru:1", {"offer_key": ""}, {"offer_key": 1}, {"key": "marktguru:1"}])
-def test_push_actions_reject_bad_bodies(server, fake_ha, path, body):
-    response = post(server, path, body)
-    assert response.status_code == 400
-    assert response.json() == {"error": 'the body must be {"offer_key": "..."}'}
-
-
-def test_push_actions_reject_a_body_that_is_not_json(server):
-    response = requests.post(f"{server}/api/mute", data="offer_key=marktguru:1", headers=AUTH, timeout=10)
+@pytest.mark.parametrize("path", ["/api/shopping-list", "/api/watchlist/remove"])
+def test_push_actions_reject_a_body_that_is_not_json(server, path):
+    response = requests.post(f"{server}{path}", data="offer_key=marktguru:1", headers=AUTH, timeout=10)
     assert response.status_code == 400
     assert response.json() == {"error": "the body must be JSON"}
 
 
-def test_push_actions_are_post_only(server):
-    assert get(server, "/api/mute", offer_key="marktguru:1").status_code == 405
+@pytest.mark.parametrize("path", ["/api/shopping-list", "/api/watchlist/remove"])
+def test_push_actions_are_post_only(server, path):
+    assert get(server, path).status_code == 405
 
 
 # --- configuration ---
