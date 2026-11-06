@@ -271,13 +271,13 @@ class DealService:
         existing = next((i for i in items if _normalized(i["summary"]) in known), None)
         if existing:
             return {"added": False, "item": existing["summary"], "list": entity, "reason": "already on the shopping list", "offer": offer_dict}
-        self._ha(ha.add_todo_item, entity, text)
+        self._ha(ha.add_todo_item, entity, text, timeout=ha.ADD_ITEM_TIMEOUT)
         return {"added": True, "item": text, "list": entity, "offer": offer_dict}
 
     @staticmethod
-    def _ha(call, *args):
+    def _ha(call, *args, **kwargs):
         try:
-            return call(*args)
+            return call(*args, **kwargs)
         except requests.RequestException as exc:
             log.warning("Home Assistant call %s failed: %s", call.__name__, exc)
             raise UpstreamError(f"Home Assistant did not answer ({_ha_failure(exc)})") from exc

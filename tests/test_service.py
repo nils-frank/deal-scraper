@@ -54,6 +54,7 @@ class FakeHomeAssistant:
             SHOPPING: [{"uid": "s1", "summary": "Milch", "status": "needs_action"}],
         }
         self.writes: list[tuple[str, dict]] = []
+        self.add_timeouts: list[float] = []
         self.status = 200
 
     def post(self, url, params=None, headers=None, json=None, timeout=None):
@@ -67,6 +68,7 @@ class FakeHomeAssistant:
             return FakeResponse(200, _dumps({"service_response": {json["entity_id"]: {"items": items}}}))
         self.writes.append((name, json))
         if name == "todo/add_item":
+            self.add_timeouts.append(timeout)
             items.append({"uid": f"new{len(self.writes)}", "summary": json["item"], "status": "needs_action"})
         elif name == "todo/remove_item":
             kept = [i for i in items if json["item"] not in (i["uid"], i["summary"])]
@@ -627,7 +629,6 @@ def slow_ha(fake_ha, monkeypatch):
     thread.start()
     monkeypatch.setattr(ha, "requests", requests)
     monkeypatch.setenv("HA_URL", f"http://127.0.0.1:{fake.server_address[1]}")
-    monkeypatch.setattr(ha, "REQUEST_TIMEOUT", 0.5)
     yield fake
     fake.released.set()
     fake.shutdown()
@@ -635,7 +636,35 @@ def slow_ha(fake_ha, monkeypatch):
     thread.join(10)
 
 
-def test_api_shopping_list_waits_for_an_add_slower_than_the_general_timeout(server, slow_ha, monkeypatch):
+def test_api_shopping_list_add_gets_the_longer_timeout(server, deals, fake_ha):
+    get(server, "/api/find", q="Butter")
+
+    post(server, "/api/shopping-list", {"offer_key": "marktguru:1"})
+
+    assert fake_ha.add_timeouts == [60]
+
+
+def test_mcp_shopping_list_add_gets_the_longer_timeout(server, deals, fake_ha):
+    get(server, "/api/find", q="Butter")
+
+    async def steps(client):
+        await client.call_tool("add_to_shopping_list", {"offer_key": "marktguru:1"})
+
+    mcp(server)(steps)
+
+    assert fake_ha.add_timeouts == [60]
+
+
+def test_watchlist_add_keeps_the_general_timeout(server, fake_ha):
+    async def steps(client):
+        await client.call_tool("watchlist_add", {"item": "Quark"})
+
+    mcp(server)(steps)
+
+    assert fake_ha.add_timeouts == [ha.REQUEST_TIMEOUT]
+
+
+def test_api_shopping_list_waits_for_a_slow_add(server, slow_ha, monkeypatch):
     monkeypatch.setattr(ha, "ADD_ITEM_TIMEOUT", 5)
     slow_ha.add_delay = 1
     get(server, "/api/find", q="Butter")
