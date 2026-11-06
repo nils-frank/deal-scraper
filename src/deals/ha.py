@@ -13,6 +13,10 @@ import requests
 log = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 15
+# Adding to a Mealie-backed list takes about 17 s: Mealie parses the ingredient
+# before it creates the item. Giving up earlier reports a failure for an item
+# that still lands.
+ADD_ITEM_TIMEOUT = 60
 
 
 def _url() -> str:
@@ -86,7 +90,7 @@ def add_todo_item(entity_id: str, summary: str, description: str | None = None) 
         f"{_url()}/api/services/todo/add_item",
         headers=_headers(),
         json=payload,
-        timeout=REQUEST_TIMEOUT,
+        timeout=ADD_ITEM_TIMEOUT,
     )
     log.info("  -> %d: %s", resp.status_code, resp.text[:300])
     resp.raise_for_status()

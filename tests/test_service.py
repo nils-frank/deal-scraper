@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 from datetime import date, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import anyio
@@ -584,6 +585,77 @@ def test_api_watchlist_remove_errors(server, fake_ha):
     failing = post(server, "/api/watchlist/remove", {"item": "Butter"})
     assert failing.status_code == 502
     assert fake_ha.summaries(WATCHLIST) == ["Butter"]
+
+
+# --- a slow Home Assistant over real sockets ---
+
+
+class SlowHomeAssistant(BaseHTTPRequestHandler):
+    """Answers todo/get_items at once and todo/add_item only after server.add_delay."""
+
+    def log_message(self, format, *args):
+        pass
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.path.startswith("/api/services/todo/get_items"):
+            answer = {"service_response": {body["entity_id"]: {"items": []}}}
+        else:
+            assert self.path == "/api/services/todo/add_item"
+            self.server.released.wait(self.server.add_delay)
+            self.server.added.append(body["item"])
+            answer = []
+        payload = json.dumps(answer).encode()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        except OSError:
+            pass  # the client gave up, as the timeout test wants
+
+
+@pytest.fixture
+def slow_ha(fake_ha, monkeypatch):
+    """Puts the real `requests` back under the `ha` client, pointed at a local slow server."""
+    fake = ThreadingHTTPServer(("127.0.0.1", 0), SlowHomeAssistant)
+    fake.added = []
+    fake.released = threading.Event()
+    fake.add_delay = 0
+    thread = threading.Thread(target=fake.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(ha, "requests", requests)
+    monkeypatch.setenv("HA_URL", f"http://127.0.0.1:{fake.server_address[1]}")
+    monkeypatch.setattr(ha, "REQUEST_TIMEOUT", 0.5)
+    yield fake
+    fake.released.set()
+    fake.shutdown()
+    fake.server_close()
+    thread.join(10)
+
+
+def test_api_shopping_list_waits_for_an_add_slower_than_the_general_timeout(server, slow_ha, monkeypatch):
+    monkeypatch.setattr(ha, "ADD_ITEM_TIMEOUT", 5)
+    slow_ha.add_delay = 1
+    get(server, "/api/find", q="Butter")
+
+    response = post(server, "/api/shopping-list", {"offer_key": "marktguru:1"})
+
+    assert response.status_code == 200
+    assert response.json()["added"] is True
+    assert slow_ha.added == [response.json()["item"]]
+
+
+def test_api_shopping_list_answers_502_when_the_add_outlasts_its_timeout(server, slow_ha, monkeypatch):
+    monkeypatch.setattr(ha, "ADD_ITEM_TIMEOUT", 0.5)
+    slow_ha.add_delay = 8
+    get(server, "/api/find", q="Butter")
+
+    response = post(server, "/api/shopping-list", {"offer_key": "marktguru:1"})
+
+    assert response.status_code == 502
+    assert "timeout" in response.text
 
 
 @pytest.mark.parametrize("path, field", [("/api/shopping-list", "offer_key"), ("/api/watchlist/remove", "item")])
