@@ -13,6 +13,10 @@ import requests
 log = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 15
+# For adds to the shopping list only. It is Mealie-backed, so an add takes about
+# 17 s: Mealie parses the ingredient before it creates the item. Giving up earlier
+# reports a failure for an item that still lands.
+ADD_ITEM_TIMEOUT = 60
 
 
 def _url() -> str:
@@ -74,10 +78,13 @@ def update_todo_item_description(entity_id: str, uid: str, description: str | No
     resp.raise_for_status()
 
 
-def add_todo_item(entity_id: str, summary: str, description: str | None = None) -> None:
-    """POST todo/add_item - adds a new item to a to-do list. Used for the
-    Angebote list, which is backed by a real local_todo entity and so - unlike
-    the old states-API sensor this replaced - survives a Home Assistant restart."""
+def add_todo_item(
+    entity_id: str, summary: str, description: str | None = None, timeout: float = REQUEST_TIMEOUT
+) -> None:
+    """POST todo/add_item - adds a new item to a to-do list: the watchlist, the
+    shopping list (which passes ADD_ITEM_TIMEOUT) or the Angebote list. The Angebote
+    list is backed by a real local_todo entity and so - unlike the old states-API
+    sensor this replaced - survives a Home Assistant restart."""
     payload = {"entity_id": entity_id, "item": summary}
     if description:
         payload["description"] = description
@@ -86,7 +93,7 @@ def add_todo_item(entity_id: str, summary: str, description: str | None = None) 
         f"{_url()}/api/services/todo/add_item",
         headers=_headers(),
         json=payload,
-        timeout=REQUEST_TIMEOUT,
+        timeout=timeout,
     )
     log.info("  -> %d: %s", resp.status_code, resp.text[:300])
     resp.raise_for_status()
