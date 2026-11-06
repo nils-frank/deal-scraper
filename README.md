@@ -100,7 +100,9 @@ curl -H "Authorization: Bearer $DEAL_SERVICE_TOKEN" "http://localhost:8000/api/f
 
 An unknown `offer_key` or an item not on the watchlist answers 404, a body without the
 non-empty string or an offer that has already ended answers 400, and a Home Assistant
-failure answers 502.
+failure answers 502. `POST /api/shopping-list` and `add_to_shopping_list` wait up to 60 s
+for Home Assistant to add the item, since an add to the Mealie-backed list takes about
+17 s, so a caller's own timeout should allow for that.
 
 ### The push
 

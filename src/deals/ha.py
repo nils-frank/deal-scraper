@@ -81,9 +81,10 @@ def update_todo_item_description(entity_id: str, uid: str, description: str | No
 def add_todo_item(
     entity_id: str, summary: str, description: str | None = None, timeout: float = REQUEST_TIMEOUT
 ) -> None:
-    """POST todo/add_item - adds a new item to a to-do list. Used for the
-    Angebote list, which is backed by a real local_todo entity and so - unlike
-    the old states-API sensor this replaced - survives a Home Assistant restart."""
+    """POST todo/add_item - adds a new item to a to-do list: the watchlist, the
+    shopping list (which passes ADD_ITEM_TIMEOUT) or the Angebote list. The Angebote
+    list is backed by a real local_todo entity and so - unlike the old states-API
+    sensor this replaced - survives a Home Assistant restart."""
     payload = {"entity_id": entity_id, "item": summary}
     if description:
         payload["description"] = description
